@@ -5,7 +5,7 @@ set -euo pipefail
 
 HOST_NAME="com.zehntage.host"
 
-for dir in "$HOME/.config/google-chrome/NativeMessagingHosts" "$HOME/.config/chromium/NativeMessagingHosts"; do
+for dir in "$HOME/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts" "$HOME/.config/google-chrome/NativeMessagingHosts" "$HOME/.config/chromium/NativeMessagingHosts"; do
   if [ -f "$dir/$HOST_NAME.json" ]; then
     rm "$dir/$HOST_NAME.json"
     echo "Removed $dir/$HOST_NAME.json"

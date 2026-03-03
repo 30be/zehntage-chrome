@@ -16,12 +16,14 @@ HOST_NAME="com.zehntage.host"
 HOST_PATH="$(cd "$(dirname "$0")" && pwd)/zehntage_host.py"
 
 # Detect browser config directory
-if [ -d "$HOME/.config/google-chrome" ]; then
+if [ -d "$HOME/.config/BraveSoftware/Brave-Browser" ]; then
+  MANIFEST_DIR="$HOME/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts"
+elif [ -d "$HOME/.config/google-chrome" ]; then
   MANIFEST_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
 elif [ -d "$HOME/.config/chromium" ]; then
   MANIFEST_DIR="$HOME/.config/chromium/NativeMessagingHosts"
 else
-  echo "Error: Neither Chrome nor Chromium config directory found."
+  echo "Error: No supported browser config directory found (Brave, Chrome, Chromium)."
   exit 1
 fi
 
