@@ -123,7 +123,9 @@ async function handleAddWord(btn) {
       btn.textContent = resp.ankiOk ? "Saved to Anki" : "Saved to file";
       btn.classList.add("saved");
       knownWords[word.toLowerCase()] = { back: translation, notes, context };
+      isHighlighting = true;
       highlightKnownWords();
+      isHighlighting = false;
     } else {
       btn.textContent = "Error";
     }
@@ -292,7 +294,9 @@ async function init() {
     const resp = await chrome.runtime.sendMessage({ action: "getWords" });
     if (resp.ok && resp.words) {
       knownWords = resp.words;
+      isHighlighting = true;
       highlightKnownWords();
+      isHighlighting = false;
     }
   } catch {}
 }
@@ -305,10 +309,18 @@ if (document.readyState === "loading") {
 }
 
 // Re-highlight on dynamic content changes (SPAs)
+let highlightPending = false;
+let isHighlighting = false;
 const observer = new MutationObserver(() => {
-  if (Object.keys(knownWords).length > 0) {
+  if (!enabled || isHighlighting || Object.keys(knownWords).length === 0) return;
+  if (highlightPending) return;
+  highlightPending = true;
+  requestIdleCallback(() => {
+    highlightPending = false;
+    isHighlighting = true;
     highlightKnownWords();
-  }
+    isHighlighting = false;
+  });
 });
 observer.observe(document.body || document.documentElement, {
   childList: true,
