@@ -62,7 +62,7 @@ function showTranslation(rect, word, translation, notes, isSingleWord) {
   const wordLower = word.toLowerCase();
   const alreadySaved = knownWords.hasOwnProperty(wordLower);
 
-  let html = `<span class="word">${escapeHtml(word)}</span> → ${escapeHtml(translation)}`;
+  let html = `<span class="word">${escapeHtml(word).replace(/\n/g, "<br>")}</span> → ${escapeHtml(translation).replace(/\n/g, "<br>")}`;
 
   if (isSingleWord && notes) {
     html += `<div class="notes">${escapeHtml(notes)}</div>`;
