@@ -6,7 +6,6 @@ let enabled = false;
 
 async function checkSiteEnabled() {
   const { sitePatterns } = await chrome.storage.local.get("sitePatterns");
-  // No patterns configured = enabled everywhere
   if (!sitePatterns || sitePatterns.length === 0) {
     enabled = true;
     return;
@@ -38,14 +37,13 @@ function createPopup(rect, html) {
 
   document.body.appendChild(popup);
 
-  // Position below selection, accounting for scroll
   const top = rect.bottom + window.scrollY + 6;
   const left = Math.max(8, rect.left + window.scrollX);
   popup.style.top = top + "px";
   popup.style.left = left + "px";
 
-  // Clamp to viewport right edge
   requestAnimationFrame(() => {
+    if (!popup) return;
     const popupRect = popup.getBoundingClientRect();
     if (popupRect.right > window.innerWidth - 8) {
       popup.style.left =
@@ -98,7 +96,6 @@ async function handleAddWord(btn) {
   const translation = btn.dataset.translation;
   const notes = btn.dataset.notes;
 
-  // Grab context from surrounding text
   const sel = window.getSelection();
   let context = "";
   if (sel.rangeCount > 0) {
@@ -123,9 +120,7 @@ async function handleAddWord(btn) {
       btn.textContent = resp.ankiOk ? "Saved to Anki" : "Saved to file";
       btn.classList.add("saved");
       knownWords[word.toLowerCase()] = { back: translation, notes, context };
-      isHighlighting = true;
-      highlightKnownWords();
-      isHighlighting = false;
+      safeHighlight();
     } else {
       btn.textContent = "Error";
     }
@@ -138,7 +133,6 @@ async function handleAddWord(btn) {
 
 document.addEventListener("mouseup", async (e) => {
   if (!enabled) return;
-  // Ignore clicks inside our own popup
   if (popup && popup.contains(e.target)) return;
 
   const sel = window.getSelection();
@@ -153,14 +147,11 @@ document.addEventListener("mouseup", async (e) => {
   const rect = range.getBoundingClientRect();
   const isSingleWord = /^\S+$/.test(text);
 
-  // Check if single word is already known
+  // Check if single word is already known — use local cache, no async
   if (isSingleWord) {
-    const lookup = await chrome.runtime.sendMessage({
-      action: "lookupWord",
-      word: text,
-    });
-    if (lookup.ok && lookup.found) {
-      showTranslation(rect, text, lookup.back, lookup.notes, true);
+    const key = text.toLowerCase();
+    if (knownWords[key]) {
+      showTranslation(rect, text, knownWords[key].back, knownWords[key].notes, true);
       return;
     }
   }
@@ -195,12 +186,10 @@ document.addEventListener("mouseup", async (e) => {
   }
 });
 
-// Dismiss popup on Escape
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") removePopup();
 });
 
-// Dismiss popup on outside click
 document.addEventListener("mousedown", (e) => {
   if (popup && !popup.contains(e.target)) {
     removePopup();
@@ -208,6 +197,28 @@ document.addEventListener("mousedown", (e) => {
 });
 
 // --- Word highlighting ---
+
+let observerActive = false;
+
+function startObserver() {
+  if (observerActive) return;
+  observer.observe(document.body || document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+  observerActive = true;
+}
+
+function stopObserver() {
+  observer.disconnect();
+  observerActive = false;
+}
+
+function safeHighlight() {
+  stopObserver();
+  highlightKnownWords();
+  startObserver();
+}
 
 function highlightKnownWords() {
   // Remove existing highlights
@@ -220,7 +231,6 @@ function highlightKnownWords() {
   const wordList = Object.keys(knownWords);
   if (wordList.length === 0) return;
 
-  // Build regex from all known words
   const escaped = wordList.map((w) =>
     w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   );
@@ -231,7 +241,6 @@ function highlightKnownWords() {
     NodeFilter.SHOW_TEXT,
     {
       acceptNode(node) {
-        // Skip our own popup, script/style tags, and already-highlighted nodes
         if (node.parentElement.closest(".zehntage-popup")) {
           return NodeFilter.FILTER_REJECT;
         }
@@ -262,13 +271,11 @@ function highlightKnownWords() {
     let match;
 
     while ((match = pattern.exec(text)) !== null) {
-      // Add text before match
       if (match.index > lastIndex) {
         frag.appendChild(
           document.createTextNode(text.substring(lastIndex, match.index))
         );
       }
-      // Add highlighted match
       const mark = document.createElement("mark");
       mark.className = "zehntage-word";
       mark.textContent = match[0];
@@ -276,7 +283,6 @@ function highlightKnownWords() {
       lastIndex = pattern.lastIndex;
     }
 
-    // Add remaining text
     if (lastIndex < text.length) {
       frag.appendChild(document.createTextNode(text.substring(lastIndex)));
     }
@@ -294,38 +300,29 @@ async function init() {
     const resp = await chrome.runtime.sendMessage({ action: "getWords" });
     if (resp.ok && resp.words) {
       knownWords = resp.words;
-      isHighlighting = true;
-      highlightKnownWords();
-      isHighlighting = false;
+      safeHighlight();
     }
   } catch {}
 }
 
-// Run init when DOM is ready
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
 } else {
   init();
 }
 
-// Re-highlight on dynamic content changes (SPAs)
-let highlightPending = false;
-let isHighlighting = false;
+// Re-highlight on dynamic content changes (SPAs), debounced
+let highlightTimer = null;
 const observer = new MutationObserver(() => {
-  if (!enabled || isHighlighting || Object.keys(knownWords).length === 0) return;
-  if (highlightPending) return;
-  highlightPending = true;
-  requestIdleCallback(() => {
-    highlightPending = false;
-    isHighlighting = true;
-    highlightKnownWords();
-    isHighlighting = false;
-  });
+  if (!enabled || Object.keys(knownWords).length === 0) return;
+  // Don't re-highlight while user has an active selection
+  const sel = window.getSelection();
+  if (sel && sel.toString().trim()) return;
+
+  clearTimeout(highlightTimer);
+  highlightTimer = setTimeout(() => safeHighlight(), 500);
 });
-observer.observe(document.body || document.documentElement, {
-  childList: true,
-  subtree: true,
-});
+startObserver();
 
 // --- Helpers ---
 
