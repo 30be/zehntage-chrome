@@ -45,6 +45,19 @@ button:hover {
   background: #e8406a;
 }
 
+textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  background: #313244;
+  color: #cdd6f4;
+  font-family: monospace;
+  font-size: 12px;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
 #status {
   margin-top: 8px;
   font-size: 12px;

@@ -1,5 +1,25 @@
 let popup = null;
 let knownWords = {};
+let enabled = false;
+
+// --- Site filtering ---
+
+async function checkSiteEnabled() {
+  const { sitePatterns } = await chrome.storage.local.get("sitePatterns");
+  // No patterns configured = enabled everywhere
+  if (!sitePatterns || sitePatterns.length === 0) {
+    enabled = true;
+    return;
+  }
+  const url = window.location.href;
+  enabled = sitePatterns.some((pattern) => {
+    try {
+      return new RegExp(pattern).test(url);
+    } catch {
+      return false;
+    }
+  });
+}
 
 // --- Popup management ---
 
@@ -115,6 +135,7 @@ async function handleAddWord(btn) {
 // --- Selection handling ---
 
 document.addEventListener("mouseup", async (e) => {
+  if (!enabled) return;
   // Ignore clicks inside our own popup
   if (popup && popup.contains(e.target)) return;
 
@@ -264,6 +285,9 @@ function highlightKnownWords() {
 
 // Load words and highlight on page load
 async function init() {
+  await checkSiteEnabled();
+  if (!enabled) return;
+
   try {
     const resp = await chrome.runtime.sendMessage({ action: "getWords" });
     if (resp.ok && resp.words) {

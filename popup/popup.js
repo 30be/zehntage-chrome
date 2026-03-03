@@ -1,26 +1,36 @@
 const keyInput = document.getElementById("key");
+const sitesInput = document.getElementById("sites");
 const saveBtn = document.getElementById("save");
-const status = document.getElementById("status");
-const wordCount = document.getElementById("word-count");
+const statusEl = document.getElementById("status");
+const wordCountEl = document.getElementById("word-count");
 
-// Load existing key
-chrome.storage.local.get(["apiKey", "words"], ({ apiKey, words }) => {
+// Load existing settings
+chrome.storage.local.get(["apiKey", "sitePatterns", "words"], ({ apiKey, sitePatterns, words }) => {
   if (apiKey) {
     keyInput.value = apiKey;
-    status.textContent = "Key saved.";
+    statusEl.textContent = "Key saved.";
+  }
+  if (sitePatterns) {
+    sitesInput.value = sitePatterns.join("\n");
   }
   const count = words ? Object.keys(words).length : 0;
-  wordCount.textContent = `${count} word${count !== 1 ? "s" : ""} in list`;
+  wordCountEl.textContent = `${count} word${count !== 1 ? "s" : ""} in list`;
 });
 
 saveBtn.addEventListener("click", () => {
   const key = keyInput.value.trim();
   if (!key) {
-    status.textContent = "Enter a key first.";
+    statusEl.textContent = "Enter a key first.";
     return;
   }
-  chrome.storage.local.set({ apiKey: key }, () => {
-    status.textContent = "Saved!";
-    setTimeout(() => (status.textContent = "Key saved."), 1500);
+
+  const sitePatterns = sitesInput.value
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  chrome.storage.local.set({ apiKey: key, sitePatterns }, () => {
+    statusEl.textContent = "Saved!";
+    setTimeout(() => (statusEl.textContent = "Key saved."), 1500);
   });
 });
