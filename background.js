@@ -1,7 +1,5 @@
 const GEMINI_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
-const ANKI_URL = "http://localhost:8765";
-const NATIVE_HOST = "com.zehntage.host";
 
 // --- Gemini API ---
 
@@ -39,15 +37,19 @@ async function callGemini(prompt) {
 
 function buildWordPrompt(word, context) {
   return `Translate the word "${word}" to Russian (or to English if the word is already \
-Russian) using the context below. Expand abbreviations using the context. \
-Notes: max 20 words. Only something that helps memorize: etymology, word roots, \
-word structure, an English/cross-language cognate, or a fun fact. For Japanese, add \
-pronunciation in brackets. No grammar info, no tense, no repeating context. \
-Empty string if nothing useful. \
+Russian) using the context below. Expand abbreviations using the context. For Japanese, add \
+pronunciation in brackets in the translation. \
+Then write a memorization note (max ~20 words). The note must hook the word to something \
+the learner ALREADY knows. Prefer, in order: (1) a recognizable cognate in English or \
+another known language, phrased as a connection — e.g. "like English 'absolve' — to \
+finish/be done with"; (2) a sound-alike or vivid mnemonic; (3) a concrete image. Do NOT \
+give bare etymology in languages the learner doesn't know (Latin, Greek, Proto-Germanic) \
+UNLESS it immediately yields a familiar modern word. If there is no genuinely memorable \
+hook, return an empty note rather than filler. No grammar info, no tense, no repeating context. \
 Examples:
-- Schmetterling→бабочка: "From Schmetten (cream) — butterflies were thought to steal milk"
-- eloquent→красноречивый: "Latin eloqui 'speak out'; cf. eloquence"
-- プロローグ→пролог: "English loanword (purorogu)"
+- vollenden→завершить: "like English 'full' + 'end' — to fully end, finish"
+- Handschuh→перчатка: "Hand + Schuh ('shoe') — a 'shoe for the hand'"
+- erfahren→узнать: "sounds like 'her-fahren' — knowledge you 'travelled toward'"
 - Zeitgeist→дух времени: ""
 Return ONLY valid JSON: {"translation":"...","notes":"..."}
 
@@ -66,123 +68,58 @@ ${text}
 ===END===`;
 }
 
-// --- AnkiConnect ---
+// --- anki-mcp server ---
 
-async function ankiRequest(action, params = {}) {
-  const resp = await fetch(ANKI_URL, {
-    method: "POST",
-    body: JSON.stringify({ action, version: 6, params }),
-  });
-  const data = await resp.json();
-  if (data.error) throw new Error(data.error);
-  return data.result;
-}
-
-async function ankiAvailable() {
-  try {
-    await ankiRequest("version");
-    return true;
-  } catch {
-    return false;
+async function zehntageRequest(path, method, body) {
+  const { ankiUrl, ankiKey } = await chrome.storage.local.get([
+    "ankiUrl",
+    "ankiKey",
+  ]);
+  if (!ankiUrl || !ankiKey) {
+    throw new Error("Anki MCP URL or key not set");
   }
-}
 
-async function ankiAddNote(word, translation, notes, context) {
-  return ankiRequest("addNote", {
-    note: {
-      deckName: "ZehnTage",
-      modelName: "Basic",
-      fields: {
-        Front: word,
-        Back: translation + (notes ? "\n" + notes : ""),
-      },
-      tags: ["zehntage"],
-      options: { allowDuplicate: false },
-    },
-  });
-}
-
-async function ankiGetAllWords() {
-  const noteIds = await ankiRequest("findNotes", {
-    query: "deck:ZehnTage tag:zehntage",
-  });
-  if (!noteIds || noteIds.length === 0) return {};
-  const notesInfo = await ankiRequest("notesInfo", { notes: noteIds });
-  const words = {};
-  for (const note of notesInfo) {
-    const front = (note.fields.Front.value || "").toLowerCase();
-    if (front) {
-      words[front] = {
-        back: note.fields.Back.value || "",
-        notes: "",
-        context: "",
-      };
-    }
+  const headers = { "X-Zehntage-Key": ankiKey };
+  const opts = { method, headers };
+  if (method === "POST") {
+    headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body || {});
   }
-  return words;
-}
 
-// --- Native messaging (TSV file I/O) ---
-
-function nativeRead() {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendNativeMessage(NATIVE_HOST, { action: "read" }, (resp) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(resp);
-      }
-    });
-  });
-}
-
-function nativeWrite(entry) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendNativeMessage(
-      NATIVE_HOST,
-      { action: "write", entry },
-      (resp) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(resp);
-        }
-      }
-    );
-  });
+  const resp = await fetch(`${ankiUrl}${path}`, opts);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`anki-mcp error ${resp.status}: ${text}`);
+  }
+  return resp.json();
 }
 
 // --- Word cache management ---
 
 async function loadWords() {
-  // Try AnkiConnect first, then native host, then cached storage
   let words = {};
-  let source = "cache";
 
   try {
-    if (await ankiAvailable()) {
-      words = await ankiGetAllWords();
-      source = "anki";
+    const list = await zehntageRequest("/zehntage/list", "GET");
+    if (Array.isArray(list)) {
+      for (const card of list) {
+        const front = (card.front || "").toLowerCase();
+        if (front) {
+          words[front] = {
+            back: card.back || "",
+            notes: card.notes || "",
+            context: card.context || "",
+          };
+        }
+      }
+      await chrome.storage.local.set({ words });
+      return words;
     }
   } catch {}
 
-  if (source !== "anki") {
-    try {
-      const resp = await nativeRead();
-      if (resp && resp.words) {
-        words = resp.words;
-        source = "native";
-      }
-    } catch {}
-  }
-
-  if (source === "cache") {
-    const stored = await chrome.storage.local.get("words");
-    words = stored.words || {};
-  }
-
-  await chrome.storage.local.set({ words });
-  return words;
+  // Fall back to cached storage
+  const stored = await chrome.storage.local.get("words");
+  return stored.words || {};
 }
 
 async function addWord(word, translation, notes, context) {
@@ -193,37 +130,39 @@ async function addWord(word, translation, notes, context) {
     "<b>$1</b>"
   );
 
+  const front = word.toLowerCase();
   const entry = {
-    front: word.toLowerCase(),
+    front,
     back: translation,
     notes: notes || "",
     context: contextWithBold,
   };
 
-  // Write to AnkiConnect if available
-  let ankiOk = false;
-  try {
-    if (await ankiAvailable()) {
-      await ankiAddNote(word, translation, notes, contextWithBold);
-      ankiOk = true;
-    }
-  } catch {}
-
-  // Always write to TSV as fallback/sync
-  try {
-    await nativeWrite(entry);
-  } catch {}
+  await zehntageRequest("/zehntage/add", "POST", entry);
 
   // Update local cache
   const { words = {} } = await chrome.storage.local.get("words");
-  words[word.toLowerCase()] = {
+  words[front] = {
     back: translation,
     notes: notes || "",
     context: contextWithBold,
   };
   await chrome.storage.local.set({ words });
 
-  return { ankiOk };
+  return {};
+}
+
+async function deleteWord(word) {
+  const front = word.toLowerCase();
+
+  await zehntageRequest("/zehntage/delete", "POST", { front });
+
+  // Update local cache
+  const { words = {} } = await chrome.storage.local.get("words");
+  delete words[front];
+  await chrome.storage.local.set({ words });
+
+  return {};
 }
 
 // --- Message handler ---
@@ -242,6 +181,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.action === "addWord") {
     addWord(msg.word, msg.translation, msg.notes, msg.context)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.action === "deleteWord") {
+    deleteWord(msg.word)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;

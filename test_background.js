@@ -10,15 +10,19 @@
 
 function buildWordPrompt(word, context) {
   return `Translate the word "${word}" to Russian (or to English if the word is already \
-Russian) using the context below. Expand abbreviations using the context. \
-Notes: max 20 words. Only something that helps memorize: etymology, word roots, \
-word structure, an English/cross-language cognate, or a fun fact. For Japanese, add \
-pronunciation in brackets. No grammar info, no tense, no repeating context. \
-Empty string if nothing useful. \
+Russian) using the context below. Expand abbreviations using the context. For Japanese, add \
+pronunciation in brackets in the translation. \
+Then write a memorization note (max ~20 words). The note must hook the word to something \
+the learner ALREADY knows. Prefer, in order: (1) a recognizable cognate in English or \
+another known language, phrased as a connection — e.g. "like English 'absolve' — to \
+finish/be done with"; (2) a sound-alike or vivid mnemonic; (3) a concrete image. Do NOT \
+give bare etymology in languages the learner doesn't know (Latin, Greek, Proto-Germanic) \
+UNLESS it immediately yields a familiar modern word. If there is no genuinely memorable \
+hook, return an empty note rather than filler. No grammar info, no tense, no repeating context. \
 Examples:
-- Schmetterling→бабочка: "From Schmetten (cream) — butterflies were thought to steal milk"
-- eloquent→красноречивый: "Latin eloqui 'speak out'; cf. eloquence"
-- プロローグ→пролог: "English loanword (purorogu)"
+- vollenden→завершить: "like English 'full' + 'end' — to fully end, finish"
+- Handschuh→перчатка: "Hand + Schuh ('shoe') — a 'shoe for the hand'"
+- erfahren→узнать: "sounds like 'her-fahren' — knowledge you 'travelled toward'"
 - Zeitgeist→дух времени: ""
 Return ONLY valid JSON: {"translation":"...","notes":"..."}
 
@@ -156,12 +160,12 @@ test("buildContextWithBold handles special regex chars", () => {
 test("buildWordPrompt includes example translations", () => {
   const prompt = buildWordPrompt("test", "some context");
   assert(
-    prompt.includes("eloquent→красноречивый"),
-    "should include eloquent example"
+    prompt.includes("vollenden→завершить"),
+    "should include vollenden example"
   );
   assert(
-    prompt.includes("Schmetterling→бабочка"),
-    "should include Schmetterling example"
+    prompt.includes("Handschuh→перчатка"),
+    "should include Handschuh example"
   );
 });
 

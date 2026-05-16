@@ -71,6 +71,7 @@ function showTranslation(rect, word, translation, notes, isSingleWord) {
   if (isSingleWord) {
     if (alreadySaved) {
       html += `<div class="saved-label">Already saved</div>`;
+      html += `<button class="btn-delete" data-word="${escapeAttr(word)}">Delete</button>`;
     } else {
       html += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}">Add to Anki</button>`;
     }
@@ -83,6 +84,14 @@ function showTranslation(rect, word, translation, notes, isSingleWord) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       handleAddWord(btn);
+    });
+  }
+
+  const delBtn = el.querySelector(".btn-delete");
+  if (delBtn) {
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      handleDeleteWord(delBtn);
     });
   }
 }
@@ -117,7 +126,7 @@ async function handleAddWord(btn) {
     });
 
     if (resp.ok) {
-      btn.textContent = resp.ankiOk ? "Saved to Anki" : "Saved to file";
+      btn.textContent = "Saved to Anki";
       btn.classList.add("saved");
       knownWords[word.toLowerCase()] = { back: translation, notes, context };
       safeHighlight();
@@ -129,16 +138,55 @@ async function handleAddWord(btn) {
   }
 }
 
+async function handleDeleteWord(btn) {
+  const word = btn.dataset.word;
+
+  btn.disabled = true;
+  btn.textContent = "Deleting...";
+
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: "deleteWord",
+      word,
+    });
+
+    if (resp.ok) {
+      delete knownWords[word.toLowerCase()];
+      safeHighlight();
+      removePopup();
+    } else {
+      btn.disabled = false;
+      btn.textContent = "Error";
+    }
+  } catch {
+    btn.disabled = false;
+    btn.textContent = "Error";
+  }
+}
+
 // --- Selection handling ---
+
+// True when a mousedown already dismissed the popup as part of this same
+// click gesture. The mouseup that follows must NOT re-open the popup, even
+// if the browser hasn't cleared the (now stale) selection yet.
+let dismissedByMousedown = false;
 
 document.addEventListener("mouseup", async (e) => {
   if (!enabled) return;
   if (popup && popup.contains(e.target)) return;
 
+  // A mousedown in this same gesture already closed the popup. Treat the
+  // click as a pure dismissal and ignore any leftover/stale selection.
+  if (dismissedByMousedown) {
+    dismissedByMousedown = false;
+    return;
+  }
+
   const sel = window.getSelection();
   const text = sel.toString().trim();
 
-  if (!text) {
+  // No real, non-collapsed selection → nothing to translate.
+  if (!text || sel.rangeCount === 0 || sel.getRangeAt(0).collapsed) {
     removePopup();
     return;
   }
@@ -193,6 +241,9 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("mousedown", (e) => {
   if (popup && !popup.contains(e.target)) {
     removePopup();
+    // Flag so the matching mouseup doesn't re-open the popup from a
+    // stale selection that the browser hasn't cleared yet.
+    dismissedByMousedown = true;
   }
 });
 

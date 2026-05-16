@@ -5,11 +5,10 @@
   "description": "Translate selected text, learn vocabulary, export to Anki",
   "permissions": [
     "storage",
-    "nativeMessaging",
     "activeTab"
   ],
   "host_permissions": [
-    "https://generativelanguage.googleapis.com/*"
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js"

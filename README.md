@@ -8,13 +8,8 @@ Chrome port of the [zehntage](https://github.com/30be/zehntage) nvim plugin.
 1. Clone the repo
 2. Open `chrome://extensions` (or `brave://extensions`)
 3. Enable **Developer Mode** → **Load Unpacked** → select the repo folder
-4. Copy the extension ID from the card
-5. Install the native messaging host:
-   ```
-   cd native && ./install.sh <extension-id>
-   ```
-6. Restart the browser
-7. Click the ZehnTage icon → paste your Gemini API key → Save
+4. Click the ZehnTage icon → paste your Gemini API key, your Anki MCP URL,
+   and your Anki key → Save
 
 ## Usage
 
@@ -43,9 +38,19 @@ Note: some PDF servers may block cross-origin requests.
 
 ## Anki integration
 
-Words are saved in two ways:
+Words are saved to a remote **anki-mcp** server. When you add a word, the
+extension sends the card to the server, which stores it in Anki. The same
+server backs the word list shown as highlights and powers the **Delete**
+button on already-saved words.
 
-1. **AnkiConnect** (if Anki is running with the [AnkiConnect](https://ankiweb.net/shared/info/2055492159) addon) — cards go directly into a "ZehnTage" deck
-2. **TSV file** (`~/.local/share/nvim/zehntage_words.tsv`) — same file the nvim plugin uses, importable into Anki manually
+Configure it in the extension popup:
 
-Both are written simultaneously. If Anki isn't running, only the TSV file is used.
+- **Anki MCP URL** — the base URL of your anki-mcp server. A trailing
+  `/mcp` (and any trailing slash) is stripped automatically, so you can
+  paste the MCP endpoint directly.
+- **Anki Key** — the secret key sent with every request as the
+  `X-Zehntage-Key` header.
+
+If the URL or key is unset, or the server is unreachable, the extension
+falls back to its locally cached word list (highlighting still works, but
+adding and deleting words will not).
