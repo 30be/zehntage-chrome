@@ -58,7 +58,7 @@ function showLoading(rect) {
   createPopup(rect, '<span class="zehntage-loading">Translating...</span>');
 }
 
-function showTranslation(rect, word, translation, notes, isSingleWord) {
+function showTranslation(rect, word, translation, notes, context, isSingleWord) {
   const wordLower = word.toLowerCase();
   const alreadySaved = knownWords.hasOwnProperty(wordLower);
 
@@ -73,7 +73,7 @@ function showTranslation(rect, word, translation, notes, isSingleWord) {
       html += `<div class="saved-label">Already saved</div>`;
       html += `<button class="btn-delete" data-word="${escapeAttr(word)}">Delete</button>`;
     } else {
-      html += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}">Add to Anki</button>`;
+      html += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}" data-context="${escapeAttr(context || "")}">Add to Anki</button>`;
     }
   }
 
@@ -104,14 +104,7 @@ async function handleAddWord(btn) {
   const word = btn.dataset.word;
   const translation = btn.dataset.translation;
   const notes = btn.dataset.notes;
-
-  const sel = window.getSelection();
-  let context = "";
-  if (sel.rangeCount > 0) {
-    const range = sel.getRangeAt(0);
-    const container = findBlockAncestor(range.commonAncestorContainer);
-    context = (container.textContent || "").substring(0, 500);
-  }
+  const context = btn.dataset.context;
 
   btn.disabled = true;
   btn.textContent = "Saving...";
@@ -199,7 +192,14 @@ document.addEventListener("mouseup", async (e) => {
   if (isSingleWord) {
     const key = text.toLowerCase();
     if (knownWords[key]) {
-      showTranslation(rect, text, knownWords[key].back, knownWords[key].notes, true);
+      showTranslation(
+        rect,
+        text,
+        knownWords[key].back,
+        knownWords[key].notes,
+        knownWords[key].context,
+        true
+      );
       return;
     }
   }
@@ -224,6 +224,7 @@ document.addEventListener("mouseup", async (e) => {
         text,
         result.translation,
         result.notes,
+        result.context,
         isSingleWord
       );
     } else {

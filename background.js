@@ -3,7 +3,25 @@ const GEMINI_URL =
 
 // --- Gemini API ---
 
-async function callGemini(prompt) {
+const WORD_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    translation: { type: "STRING" },
+    notes: { type: "STRING" },
+    context: { type: "STRING" },
+  },
+  required: ["translation", "notes", "context"],
+};
+
+const TRANSLATE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    translation: { type: "STRING" },
+  },
+  required: ["translation"],
+};
+
+async function callGemini(prompt, schema) {
   const { apiKey } = await chrome.storage.local.get("apiKey");
   if (!apiKey) throw new Error("API key not set");
 
@@ -15,7 +33,11 @@ async function callGemini(prompt) {
     },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2 },
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: "application/json",
+        responseSchema: schema,
+      },
     }),
   });
 
@@ -36,36 +58,28 @@ async function callGemini(prompt) {
 }
 
 function buildWordPrompt(word, context) {
-  return `Translate the word "${word}" to Russian (or to English if the word is already \
-Russian) using the context below. Expand abbreviations using the context. For Japanese, add \
-pronunciation in brackets in the translation. \
-Then write a memorization note (max ~20 words). The note must hook the word to something \
-the learner ALREADY knows. Prefer, in order: (1) a recognizable cognate in English or \
-another known language, phrased as a connection — e.g. "like English 'absolve' — to \
-finish/be done with"; (2) a sound-alike or vivid mnemonic; (3) a concrete image. Do NOT \
-give bare etymology in languages the learner doesn't know (Latin, Greek, Proto-Germanic) \
-UNLESS it immediately yields a familiar modern word. If there is no genuinely memorable \
-hook, return an empty note rather than filler. No grammar info, no tense, no repeating context. \
-Examples:
-- vollenden→завершить: "like English 'full' + 'end' — to fully end, finish"
-- Handschuh→перчатка: "Hand + Schuh ('shoe') — a 'shoe for the hand'"
-- erfahren→узнать: "sounds like 'her-fahren' — knowledge you 'travelled toward'"
-- Zeitgeist→дух времени: ""
-Return ONLY valid JSON: {"translation":"...","notes":"..."}
+  return `The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "${word}", which appeared in the text below.
 
-Context:
+Provide three fields:
+- translation: "${word}" translated into Russian — or into English if the word is itself Russian. Expand abbreviations using the text. For Japanese words, append the pronunciation in brackets.
+- notes: a short explanation, max ~25 words, that makes the word stick. When the translation alone loses nuance, say what the word actually means; always add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.
+- context: the single sentence from the text below that best shows the word in use, trimmed to just that sentence, with the studied word wrapped in <b></b>. If the text below has no usable sentence, invent a short natural one.
+
+Examples (word → translation: notes):
+- vollenden → завершить: voll ('full') + enden ('to end') — to bring something fully to its end.
+- Feierabend → конец рабочего дня: Feier ('celebration') + Abend ('evening') — not just quitting time, but the relaxed free evening after work.
+- Wetter → погода: the English cognate 'weather' — literally the same word.
+
+Text:
 ${context}`;
 }
 
 function buildTranslatePrompt(text) {
-  return `You are a translator. Your ONLY job is to translate the exact text between the \
-delimiters below to Russian (or to English if the text is already Russian). Expand \
-abbreviations using context. Do NOT paraphrase, summarize, or translate any other text. \
-Return ONLY valid JSON: {"translation":"..."}
+  return `Translate the text between the === markers into Russian — or into English if it is already Russian. Expand abbreviations using the surrounding words. Translate only that text, nothing else.
 
-===BEGIN===
+===
 ${text}
-===END===`;
+===`;
 }
 
 // --- anki-mcp server ---
@@ -123,19 +137,13 @@ async function loadWords() {
 }
 
 async function addWord(word, translation, notes, context) {
-  // Build context with <b> tags around the word
-  const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const contextWithBold = context.replace(
-    new RegExp(`(${escapedWord})`, "gi"),
-    "<b>$1</b>"
-  );
-
+  // context comes from the model already containing <b>...</b> — store as-is.
   const front = word.toLowerCase();
   const entry = {
     front,
     back: translation,
     notes: notes || "",
-    context: contextWithBold,
+    context: context || "",
   };
 
   await zehntageRequest("/zehntage/add", "POST", entry);
@@ -145,7 +153,7 @@ async function addWord(word, translation, notes, context) {
   words[front] = {
     back: translation,
     notes: notes || "",
-    context: contextWithBold,
+    context: context || "",
   };
   await chrome.storage.local.set({ words });
 
@@ -172,8 +180,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const prompt = msg.isSingleWord
       ? buildWordPrompt(msg.text, msg.context)
       : buildTranslatePrompt(msg.text);
+    const schema = msg.isSingleWord ? WORD_SCHEMA : TRANSLATE_SCHEMA;
 
-    callGemini(prompt)
+    callGemini(prompt, schema)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true; // async response

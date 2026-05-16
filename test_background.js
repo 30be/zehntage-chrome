@@ -9,36 +9,28 @@
 // --- Extract testable functions ---
 
 function buildWordPrompt(word, context) {
-  return `Translate the word "${word}" to Russian (or to English if the word is already \
-Russian) using the context below. Expand abbreviations using the context. For Japanese, add \
-pronunciation in brackets in the translation. \
-Then write a memorization note (max ~20 words). The note must hook the word to something \
-the learner ALREADY knows. Prefer, in order: (1) a recognizable cognate in English or \
-another known language, phrased as a connection — e.g. "like English 'absolve' — to \
-finish/be done with"; (2) a sound-alike or vivid mnemonic; (3) a concrete image. Do NOT \
-give bare etymology in languages the learner doesn't know (Latin, Greek, Proto-Germanic) \
-UNLESS it immediately yields a familiar modern word. If there is no genuinely memorable \
-hook, return an empty note rather than filler. No grammar info, no tense, no repeating context. \
-Examples:
-- vollenden→завершить: "like English 'full' + 'end' — to fully end, finish"
-- Handschuh→перчатка: "Hand + Schuh ('shoe') — a 'shoe for the hand'"
-- erfahren→узнать: "sounds like 'her-fahren' — knowledge you 'travelled toward'"
-- Zeitgeist→дух времени: ""
-Return ONLY valid JSON: {"translation":"...","notes":"..."}
+  return `The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "${word}", which appeared in the text below.
 
-Context:
+Provide three fields:
+- translation: "${word}" translated into Russian — or into English if the word is itself Russian. Expand abbreviations using the text. For Japanese words, append the pronunciation in brackets.
+- notes: a short explanation, max ~25 words, that makes the word stick. When the translation alone loses nuance, say what the word actually means; always add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.
+- context: the single sentence from the text below that best shows the word in use, trimmed to just that sentence, with the studied word wrapped in <b></b>. If the text below has no usable sentence, invent a short natural one.
+
+Examples (word → translation: notes):
+- vollenden → завершить: voll ('full') + enden ('to end') — to bring something fully to its end.
+- Feierabend → конец рабочего дня: Feier ('celebration') + Abend ('evening') — not just quitting time, but the relaxed free evening after work.
+- Wetter → погода: the English cognate 'weather' — literally the same word.
+
+Text:
 ${context}`;
 }
 
 function buildTranslatePrompt(text) {
-  return `You are a translator. Your ONLY job is to translate the exact text between the \
-delimiters below to Russian (or to English if the text is already Russian). Expand \
-abbreviations using context. Do NOT paraphrase, summarize, or translate any other text. \
-Return ONLY valid JSON: {"translation":"..."}
+  return `Translate the text between the === markers into Russian — or into English if it is already Russian. Expand abbreviations using the surrounding words. Translate only that text, nothing else.
 
-===BEGIN===
+===
 ${text}
-===END===`;
+===`;
 }
 
 function parseGeminiResponse(responseText) {
@@ -97,16 +89,23 @@ test("buildWordPrompt includes word and context", () => {
   const prompt = buildWordPrompt("Hund", "Der Hund ist groß");
   assert(prompt.includes('"Hund"'), "should contain the word");
   assert(prompt.includes("Der Hund ist groß"), "should contain context");
-  assert(prompt.includes("translation"), "should ask for translation");
-  assert(prompt.includes("notes"), "should ask for notes");
+  assert(prompt.includes("translation"), "should mention translation field");
+  assert(prompt.includes("notes"), "should mention notes field");
+  assert(prompt.includes("context"), "should mention context field");
 });
 
-test("buildTranslatePrompt wraps text in delimiters", () => {
+test("buildWordPrompt does not mention JSON or output format", () => {
+  const prompt = buildWordPrompt("Hund", "Der Hund ist groß");
+  assert(!prompt.includes("JSON"), "should not mention JSON");
+  assert(!prompt.includes("===BEGIN==="), "should not contain old delimiters");
+});
+
+test("buildTranslatePrompt wraps text in === markers", () => {
   const prompt = buildTranslatePrompt("Der schnelle Fuchs");
-  assert(prompt.includes("===BEGIN==="), "should have begin delimiter");
-  assert(prompt.includes("===END==="), "should have end delimiter");
+  assert(prompt.includes("==="), "should have === markers");
   assert(prompt.includes("Der schnelle Fuchs"), "should contain the text");
   assert(!prompt.includes("notes"), "should not ask for notes");
+  assert(!prompt.includes("JSON"), "should not mention JSON");
 });
 
 test("parseGeminiResponse handles clean JSON", () => {
@@ -160,20 +159,20 @@ test("buildContextWithBold handles special regex chars", () => {
 test("buildWordPrompt includes example translations", () => {
   const prompt = buildWordPrompt("test", "some context");
   assert(
-    prompt.includes("vollenden→завершить"),
+    prompt.includes("vollenden → завершить"),
     "should include vollenden example"
   );
   assert(
-    prompt.includes("Handschuh→перчатка"),
-    "should include Handschuh example"
+    prompt.includes("Feierabend → конец рабочего дня"),
+    "should include Feierabend example"
   );
 });
 
-test("buildTranslatePrompt asks for JSON only", () => {
+test("buildTranslatePrompt translates only the marked text", () => {
   const prompt = buildTranslatePrompt("some text");
   assert(
-    prompt.includes('{"translation":"..."}'),
-    "should show expected JSON format"
+    prompt.includes("Translate only that text, nothing else."),
+    "should instruct to translate only the marked text"
   );
 });
 
