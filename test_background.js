@@ -9,15 +9,17 @@
 // --- Extract testable functions ---
 
 function buildWordPrompt(word, context) {
-  return `Translate the word "${word}" to English using context below. \
-Notes: max 15 words. Only something that helps memorize: etymology, word roots, \
-word structure, or a fun fact. No grammar info, no tense, no repeating context. \
+  return `Translate the word "${word}" to Russian (or to English if the word is already \
+Russian) using the context below. Expand abbreviations using the context. \
+Notes: max 20 words. Only something that helps memorize: etymology, word roots, \
+word structure, an English/cross-language cognate, or a fun fact. For Japanese, add \
+pronunciation in brackets. No grammar info, no tense, no repeating context. \
 Empty string if nothing useful. \
 Examples:
-- Kutsche→carriage: "From Hungarian kocsi, named after the town Kocs"
-- Schmetterling→butterfly: "From Schmetten (cream) — butterflies were thought to steal milk"
-- Angst→fear: "Same word borrowed into English as-is"
-- Zeitgeist→spirit of the time: ""
+- Schmetterling→бабочка: "From Schmetten (cream) — butterflies were thought to steal milk"
+- eloquent→красноречивый: "Latin eloqui 'speak out'; cf. eloquence"
+- プロローグ→пролог: "English loanword (purorogu)"
+- Zeitgeist→дух времени: ""
 Return ONLY valid JSON: {"translation":"...","notes":"..."}
 
 Context:
@@ -26,7 +28,8 @@ ${context}`;
 
 function buildTranslatePrompt(text) {
   return `You are a translator. Your ONLY job is to translate the exact text between the \
-delimiters below to English. Do NOT paraphrase, summarize, or translate any other text. \
+delimiters below to Russian (or to English if the text is already Russian). Expand \
+abbreviations using context. Do NOT paraphrase, summarize, or translate any other text. \
 Return ONLY valid JSON: {"translation":"..."}
 
 ===BEGIN===
@@ -152,9 +155,12 @@ test("buildContextWithBold handles special regex chars", () => {
 
 test("buildWordPrompt includes example translations", () => {
   const prompt = buildWordPrompt("test", "some context");
-  assert(prompt.includes("Kutsche→carriage"), "should include Kutsche example");
   assert(
-    prompt.includes("Schmetterling→butterfly"),
+    prompt.includes("eloquent→красноречивый"),
+    "should include eloquent example"
+  );
+  assert(
+    prompt.includes("Schmetterling→бабочка"),
     "should include Schmetterling example"
   );
 });
