@@ -33,6 +33,18 @@ ${text}
 ===`;
 }
 
+function buildSummaryPrompt(text) {
+  return `Summarize the text between the === markers in Russian — or in English if the text is itself in Russian. Keep the summary concise (a few sentences, max ~60 words). Summarize only that text, nothing else.
+
+===
+${text}
+===`;
+}
+
+function countWords(text) {
+  return (text.trim().match(/\S+/g) || []).length;
+}
+
 function parseGeminiResponse(responseText) {
   const cleaned = responseText
     .replace(/^```json\s*/, "")
@@ -166,6 +178,21 @@ test("buildWordPrompt includes example translations", () => {
     prompt.includes("Feierabend → конец рабочего дня"),
     "should include Feierabend example"
   );
+});
+
+test("buildSummaryPrompt summarizes the marked text", () => {
+  const prompt = buildSummaryPrompt("a very long passage");
+  assert(prompt.includes("Summarize"), "should ask to summarize");
+  assert(prompt.includes("a very long passage"), "should contain the text");
+  assert(prompt.includes("===\na very long passage\n==="), "should wrap text in markers");
+  assert(!prompt.includes("Translate"), "should not ask to translate");
+});
+
+test("countWords picks the right prompt at the 100-word threshold", () => {
+  assertEqual(countWords("hello world"), 2, "two words");
+  assertEqual(countWords("   "), 0, "whitespace only");
+  const long = Array(105).fill("word").join(" ");
+  assert(countWords(long) > 100, "should detect long passage");
 });
 
 test("buildTranslatePrompt translates only the marked text", () => {

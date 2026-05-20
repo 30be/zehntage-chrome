@@ -1,5 +1,5 @@
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent";
 
 // --- Gemini API ---
 
@@ -80,6 +80,18 @@ function buildTranslatePrompt(text) {
 ===
 ${text}
 ===`;
+}
+
+function buildSummaryPrompt(text) {
+  return `Summarize the text between the === markers in Russian — or in English if the text is itself in Russian. Keep the summary concise (a few sentences, max ~60 words). Summarize only that text, nothing else.
+
+===
+${text}
+===`;
+}
+
+function countWords(text) {
+  return (text.trim().match(/\S+/g) || []).length;
 }
 
 // --- anki-mcp server ---
@@ -177,9 +189,14 @@ async function deleteWord(word) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === "translate") {
-    const prompt = msg.isSingleWord
-      ? buildWordPrompt(msg.text, msg.context)
-      : buildTranslatePrompt(msg.text);
+    let prompt;
+    if (msg.isSingleWord) {
+      prompt = buildWordPrompt(msg.text, msg.context);
+    } else if (countWords(msg.text) > 100) {
+      prompt = buildSummaryPrompt(msg.text);
+    } else {
+      prompt = buildTranslatePrompt(msg.text);
+    }
     const schema = msg.isSingleWord ? WORD_SCHEMA : TRANSLATE_SCHEMA;
 
     callGemini(prompt, schema)
