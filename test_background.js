@@ -11,15 +11,16 @@
 function buildWordPrompt(word, context) {
   return `The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "${word}", which appeared in the text below.
 
-Provide three fields:
+Provide four fields:
+- article: if "${word}" is a German common noun, return its definite article ("der", "die", or "das"). Otherwise (verbs, adjectives, English/Russian words, anything that is not a noun) return an empty string.
 - translation: "${word}" translated into Russian — or into English if the word is itself Russian. Expand abbreviations using the text. For Japanese words, append the pronunciation in brackets.
 - notes: a short explanation, max ~25 words, that makes the word stick. When the translation alone loses nuance, say what the word actually means; always add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.
 - context: the single sentence from the text below that best shows the word in use, trimmed to just that sentence, with the studied word wrapped in <b></b>. If the text below has no usable sentence, invent a short natural one.
 
-Examples (word → translation: notes):
-- vollenden → завершить: voll ('full') + enden ('to end') — to bring something fully to its end.
-- Feierabend → конец рабочего дня: Feier ('celebration') + Abend ('evening') — not just quitting time, but the relaxed free evening after work.
-- Wetter → погода: the English cognate 'weather' — literally the same word.
+Examples:
+- "vollenden" → article: "", translation: "завершить", notes: "voll ('full') + enden ('to end') — to bring something fully to its end."
+- "Handschuh" → article: "der", translation: "перчатка", notes: "Hand + Schuh ('shoe') — literally a 'shoe for the hand'."
+- "Wetter" → article: "das", translation: "погода", notes: "the English cognate 'weather' — literally the same word."
 
 Text:
 ${context}`;
@@ -170,14 +171,16 @@ test("buildContextWithBold handles special regex chars", () => {
 
 test("buildWordPrompt includes example translations", () => {
   const prompt = buildWordPrompt("test", "some context");
-  assert(
-    prompt.includes("vollenden → завершить"),
-    "should include vollenden example"
-  );
-  assert(
-    prompt.includes("Feierabend → конец рабочего дня"),
-    "should include Feierabend example"
-  );
+  assert(prompt.includes('"vollenden"'), "should include vollenden example");
+  assert(prompt.includes('"Handschuh"'), "should include Handschuh example");
+  assert(prompt.includes('article: "der"'), "should show 'der' article example");
+  assert(prompt.includes('article: "das"'), "should show 'das' article example");
+});
+
+test("buildWordPrompt asks for the article field", () => {
+  const prompt = buildWordPrompt("Hund", "Der Hund");
+  assert(prompt.includes("article:"), "should mention the article field");
+  assert(prompt.includes('"der", "die", or "das"'), "should list the three articles");
 });
 
 test("buildSummaryPrompt summarizes the marked text", () => {

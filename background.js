@@ -6,11 +6,12 @@ const GEMINI_URL =
 const WORD_SCHEMA = {
   type: "OBJECT",
   properties: {
+    article: { type: "STRING" },
     translation: { type: "STRING" },
     notes: { type: "STRING" },
     context: { type: "STRING" },
   },
-  required: ["translation", "notes", "context"],
+  required: ["article", "translation", "notes", "context"],
 };
 
 const TRANSLATE_SCHEMA = {
@@ -60,18 +61,24 @@ async function callGemini(prompt, schema) {
 function buildWordPrompt(word, context) {
   return `The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "${word}", which appeared in the text below.
 
-Provide three fields:
+Provide four fields:
+- article: if "${word}" is a German common noun, return its definite article ("der", "die", or "das"). Otherwise (verbs, adjectives, English/Russian words, anything that is not a noun) return an empty string.
 - translation: "${word}" translated into Russian — or into English if the word is itself Russian. Expand abbreviations using the text. For Japanese words, append the pronunciation in brackets.
 - notes: a short explanation, max ~25 words, that makes the word stick. When the translation alone loses nuance, say what the word actually means; always add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.
 - context: the single sentence from the text below that best shows the word in use, trimmed to just that sentence, with the studied word wrapped in <b></b>. If the text below has no usable sentence, invent a short natural one.
 
-Examples (word → translation: notes):
-- vollenden → завершить: voll ('full') + enden ('to end') — to bring something fully to its end.
-- Feierabend → конец рабочего дня: Feier ('celebration') + Abend ('evening') — not just quitting time, but the relaxed free evening after work.
-- Wetter → погода: the English cognate 'weather' — literally the same word.
+Examples:
+- "vollenden" → article: "", translation: "завершить", notes: "voll ('full') + enden ('to end') — to bring something fully to its end."
+- "Handschuh" → article: "der", translation: "перчатка", notes: "Hand + Schuh ('shoe') — literally a 'shoe for the hand'."
+- "Wetter" → article: "das", translation: "погода", notes: "the English cognate 'weather' — literally the same word."
 
 Text:
 ${context}`;
+}
+
+function splitArticle(front) {
+  const m = front.match(/^(der|die|das)\s+(.+)$/);
+  return m ? { article: m[1], bare: m[2] } : { article: "", bare: front };
 }
 
 function buildTranslatePrompt(text) {
@@ -129,12 +136,15 @@ async function loadWords() {
     const list = await zehntageRequest("/zehntage/list", "GET");
     if (Array.isArray(list)) {
       for (const card of list) {
-        const front = (card.front || "").toLowerCase();
+        const front = card.front || "";
         if (front) {
-          words[front] = {
+          const { article, bare } = splitArticle(front);
+          words[bare.toLowerCase()] = {
             back: card.back || "",
             notes: card.notes || "",
             context: card.context || "",
+            article,
+            front_full: front,
           };
         }
       }
@@ -148,11 +158,12 @@ async function loadWords() {
   return stored.words || {};
 }
 
-async function addWord(word, translation, notes, context) {
+async function addWord(word, translation, notes, context, article) {
   // context comes from the model already containing <b>...</b> — store as-is.
-  const front = word.toLowerCase();
+  const key = word.toLowerCase();
+  const front_full = article ? `${article} ${word}` : word;
   const entry = {
-    front,
+    front: front_full,
     back: translation,
     notes: notes || "",
     context: context || "",
@@ -162,10 +173,12 @@ async function addWord(word, translation, notes, context) {
 
   // Update local cache
   const { words = {} } = await chrome.storage.local.get("words");
-  words[front] = {
+  words[key] = {
     back: translation,
     notes: notes || "",
     context: context || "",
+    article: article || "",
+    front_full,
   };
   await chrome.storage.local.set({ words });
 
@@ -173,13 +186,15 @@ async function addWord(word, translation, notes, context) {
 }
 
 async function deleteWord(word) {
-  const front = word.toLowerCase();
+  const key = word.toLowerCase();
 
-  await zehntageRequest("/zehntage/delete", "POST", { front });
-
-  // Update local cache
+  // Look up the stored Front (which may include an article like "der Hund").
   const { words = {} } = await chrome.storage.local.get("words");
-  delete words[front];
+  const front_to_delete = (words[key] && words[key].front_full) || word;
+
+  await zehntageRequest("/zehntage/delete", "POST", { front: front_to_delete });
+
+  delete words[key];
   await chrome.storage.local.set({ words });
 
   return {};
@@ -206,7 +221,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.action === "addWord") {
-    addWord(msg.word, msg.translation, msg.notes, msg.context)
+    addWord(msg.word, msg.translation, msg.notes, msg.context, msg.article)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;

@@ -58,11 +58,12 @@ function showLoading(rect) {
   createPopup(rect, '<span class="zehntage-loading">Translating...</span>');
 }
 
-function showTranslation(rect, word, translation, notes, context, isSingleWord) {
+function showTranslation(rect, word, translation, notes, context, article, isSingleWord) {
   const wordLower = word.toLowerCase();
   const alreadySaved = knownWords.hasOwnProperty(wordLower);
+  const display = article ? `${article} ${word}` : word;
 
-  let html = `<span class="word">${escapeHtml(word).replace(/\n/g, "<br>")}</span> → ${escapeHtml(translation).replace(/\n/g, "<br>")}`;
+  let html = `<span class="word">${escapeHtml(display).replace(/\n/g, "<br>")}</span> → ${escapeHtml(translation).replace(/\n/g, "<br>")}`;
 
   if (isSingleWord && notes) {
     html += `<div class="notes">${escapeHtml(notes)}</div>`;
@@ -73,7 +74,7 @@ function showTranslation(rect, word, translation, notes, context, isSingleWord) 
       html += `<div class="saved-label">Already saved</div>`;
       html += `<button class="btn-delete" data-word="${escapeAttr(word)}">Delete</button>`;
     } else {
-      html += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}" data-context="${escapeAttr(context || "")}">Add to Anki</button>`;
+      html += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}" data-context="${escapeAttr(context || "")}" data-article="${escapeAttr(article || "")}">Add to Anki</button>`;
     }
   }
 
@@ -105,6 +106,7 @@ async function handleAddWord(btn) {
   const translation = btn.dataset.translation;
   const notes = btn.dataset.notes;
   const context = btn.dataset.context;
+  const article = btn.dataset.article || "";
 
   btn.disabled = true;
   btn.textContent = "Saving...";
@@ -116,12 +118,19 @@ async function handleAddWord(btn) {
       translation,
       notes,
       context,
+      article,
     });
 
     if (resp.ok) {
       btn.textContent = "Saved to Anki";
       btn.classList.add("saved");
-      knownWords[word.toLowerCase()] = { back: translation, notes, context };
+      knownWords[word.toLowerCase()] = {
+        back: translation,
+        notes,
+        context,
+        article,
+        front_full: article ? `${article} ${word}` : word,
+      };
       safeHighlight();
     } else {
       btn.textContent = "Error";
@@ -198,6 +207,7 @@ document.addEventListener("mouseup", async (e) => {
         knownWords[key].back,
         knownWords[key].notes,
         knownWords[key].context,
+        knownWords[key].article || "",
         true
       );
       return;
@@ -225,6 +235,7 @@ document.addEventListener("mouseup", async (e) => {
         result.translation,
         result.notes,
         result.context,
+        result.article || "",
         isSingleWord
       );
     } else {
