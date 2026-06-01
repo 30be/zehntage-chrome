@@ -24,9 +24,15 @@
   font-style: italic;
 }
 
+.zehntage-popup .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .zehntage-popup .btn-anki {
   display: inline-block;
-  margin-top: 8px;
   padding: 4px 12px;
   background: #dc143c;
   color: #fff;
@@ -57,7 +63,6 @@
 
 .zehntage-popup .btn-delete {
   display: inline-block;
-  margin-top: 8px;
   padding: 4px 12px;
   background: #dc143c;
   color: #fff;
@@ -79,8 +84,6 @@
 .zehntage-popup .btn-explain,
 .zehntage-popup .btn-discuss {
   display: inline-block;
-  margin-top: 8px;
-  margin-right: 6px;
   padding: 4px 12px;
   background: #45475a;
   color: #cdd6f4;

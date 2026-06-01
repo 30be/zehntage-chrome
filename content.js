@@ -1,4 +1,8 @@
 let popup = null;
+
+// In-memory caches, keyed by selected text. Per page — cleared on reload.
+const lookupCache = {};
+const explainCache = {};
 let knownWords = {};
 let enabled = false;
 
@@ -71,18 +75,20 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
     html += `<div class="notes">${escapeHtml(notes)}</div>`;
   }
 
+  let actions = "";
   if (isSingleWord) {
     if (alreadySaved) {
       html += `<div class="saved-label">Already saved</div>`;
-      html += `<button class="btn-delete" data-word="${escapeAttr(word)}">Delete</button>`;
+      actions += `<button class="btn-delete" data-word="${escapeAttr(word)}">Delete</button>`;
     } else {
-      html += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}" data-context="${escapeAttr(context || "")}" data-article="${escapeAttr(article || "")}">Add to Anki</button>`;
+      actions += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}" data-context="${escapeAttr(context || "")}" data-article="${escapeAttr(article || "")}">Add to Anki</button>`;
     }
   }
 
   const refContext = pageContext || context || "";
-  html += `<button class="btn-explain" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Explain</button>`;
-  html += `<button class="btn-discuss" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Discuss</button>`;
+  actions += `<button class="btn-explain" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Explain</button>`;
+  actions += `<button class="btn-discuss" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Discuss</button>`;
+  html += `<div class="actions">${actions}</div>`;
 
   const el = createPopup(rect, html);
 
@@ -191,6 +197,22 @@ async function handleDeleteWord(btn) {
 async function handleExplain(btn) {
   const text = btn.dataset.text;
   const context = btn.dataset.context || "";
+  const popupEl = btn.closest(".zehntage-popup") || btn.parentNode;
+
+  // Already explained in this popup → don't duplicate.
+  if (popupEl.querySelector(".explanation")) return;
+
+  const render = (explanation) => {
+    const div = document.createElement("div");
+    div.className = "explanation";
+    div.innerHTML = escapeHtml(explanation).replace(/\n/g, "<br>");
+    popupEl.appendChild(div);
+  };
+
+  if (explainCache[text]) {
+    render(explainCache[text]);
+    return;
+  }
 
   btn.disabled = true;
   btn.textContent = "Thinking…";
@@ -203,10 +225,8 @@ async function handleExplain(btn) {
     });
 
     if (resp.ok) {
-      const div = document.createElement("div");
-      div.className = "explanation";
-      div.innerHTML = escapeHtml(resp.text).replace(/\n/g, "<br>");
-      btn.parentNode.appendChild(div);
+      explainCache[text] = resp.text;
+      render(resp.text);
       btn.textContent = "Explain";
       btn.disabled = false;
     } else {
@@ -287,6 +307,22 @@ document.addEventListener("mouseup", async (e) => {
     }
   }
 
+  const cacheKey = (isSingleWord ? "w:" : "p:") + text;
+  if (lookupCache[cacheKey]) {
+    const c = lookupCache[cacheKey];
+    showTranslation(
+      rect,
+      text,
+      c.translation,
+      c.notes,
+      c.context,
+      c.article || "",
+      isSingleWord,
+      context
+    );
+    return;
+  }
+
   showLoading(rect);
 
   try {
@@ -298,6 +334,12 @@ document.addEventListener("mouseup", async (e) => {
     });
 
     if (result.ok) {
+      lookupCache[cacheKey] = {
+        translation: result.translation,
+        notes: result.notes,
+        context: result.context,
+        article: result.article || "",
+      };
       showTranslation(
         rect,
         text,

@@ -80,7 +80,7 @@ async function callOpus(prompt) {
     },
     body: JSON.stringify({
       model: "claude-opus-4-8",
-      max_tokens: 1024,
+      max_tokens: 300,
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -145,7 +145,7 @@ ${context}`;
 }
 
 function buildExplainPrompt(text, context) {
-  return `You are helping a reader (native Russian speaker, fluent in English) understand something they selected while reading a web page. Explain the selected text in depth and clearly: any literary, biblical, historical, or cultural references; named people, works, or places (who or what they are and why they matter); jokes, irony, allusions, idioms, or double meanings, and what the point is. If it quotes or names something famous, note whether it is commonly misattributed or whether its modern usage differs from the original meaning. Write in the same language as the selected text. Be thorough but concise — a few short paragraphs at most.
+  return `You are helping a reader (native Russian speaker, fluent in English) understand something they selected while reading a web page. In just a couple of sentences (no more than ~50 words, as short as a quick note), explain what it really means: any reference, named person or work, joke, irony, allusion, or double meaning, and the point of it. If it quotes or names something famous, note whether it is commonly misattributed or whether its modern usage differs from the original meaning. Write in the same language as the selected text.
 
 Selected text:
 ===
