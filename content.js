@@ -58,14 +58,16 @@ function showLoading(rect) {
   createPopup(rect, '<span class="zehntage-loading">Translating...</span>');
 }
 
-function showTranslation(rect, word, translation, notes, context, article, isSingleWord) {
+function showTranslation(rect, word, translation, notes, context, article, isSingleWord, pageContext) {
   const wordLower = word.toLowerCase();
   const alreadySaved = knownWords.hasOwnProperty(wordLower);
   const display = article ? `${article} ${word}` : word;
+  // Elide the source side only; keep the translation full.
+  const displayElided = elideMiddle(display);
 
-  let html = `<span class="word">${escapeHtml(display).replace(/\n/g, "<br>")}</span> → ${escapeHtml(translation).replace(/\n/g, "<br>")}`;
+  let html = `<span class="word">${escapeHtml(displayElided).replace(/\n/g, "<br>")}</span> → ${escapeHtml(translation).replace(/\n/g, "<br>")}`;
 
-  if (isSingleWord && notes) {
+  if (notes) {
     html += `<div class="notes">${escapeHtml(notes)}</div>`;
   }
 
@@ -77,6 +79,10 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
       html += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}" data-context="${escapeAttr(context || "")}" data-article="${escapeAttr(article || "")}">Add to Anki</button>`;
     }
   }
+
+  const refContext = pageContext || context || "";
+  html += `<button class="btn-explain" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Explain</button>`;
+  html += `<button class="btn-discuss" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Discuss</button>`;
 
   const el = createPopup(rect, html);
 
@@ -93,6 +99,22 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       handleDeleteWord(delBtn);
+    });
+  }
+
+  const explainBtn = el.querySelector(".btn-explain");
+  if (explainBtn) {
+    explainBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      handleExplain(explainBtn);
+    });
+  }
+
+  const discussBtn = el.querySelector(".btn-discuss");
+  if (discussBtn) {
+    discussBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      handleDiscuss(discussBtn);
     });
   }
 }
@@ -166,6 +188,52 @@ async function handleDeleteWord(btn) {
   }
 }
 
+async function handleExplain(btn) {
+  const text = btn.dataset.text;
+  const context = btn.dataset.context || "";
+
+  btn.disabled = true;
+  btn.textContent = "Thinking…";
+
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: "explain",
+      text,
+      context,
+    });
+
+    if (resp.ok) {
+      const div = document.createElement("div");
+      div.className = "explanation";
+      div.innerHTML = escapeHtml(resp.text).replace(/\n/g, "<br>");
+      btn.parentNode.appendChild(div);
+      btn.textContent = "Explain";
+      btn.disabled = false;
+    } else {
+      btn.textContent = "Error";
+      btn.disabled = false;
+    }
+  } catch {
+    btn.textContent = "Error";
+    btn.disabled = false;
+  }
+}
+
+function handleDiscuss(btn) {
+  const text = btn.dataset.text;
+  const context = (btn.dataset.context || "").substring(0, 1000);
+
+  const prompt = `While reading ${window.location.href} I came across this passage:
+
+${context}
+
+The part I selected: «${text}».
+`;
+
+  const url = "https://claude.ai/new?incognito&q=" + encodeURIComponent(prompt);
+  window.open(url, "_blank");
+}
+
 // --- Selection handling ---
 
 // True when a mousedown already dismissed the popup as part of this same
@@ -197,6 +265,10 @@ document.addEventListener("mouseup", async (e) => {
   const rect = range.getBoundingClientRect();
   const isSingleWord = /^\S+$/.test(text);
 
+  // Get surrounding context
+  const container = findBlockAncestor(range.commonAncestorContainer);
+  const context = (container.textContent || "").substring(0, 500);
+
   // Check if single word is already known — use local cache, no async
   if (isSingleWord) {
     const key = text.toLowerCase();
@@ -208,15 +280,12 @@ document.addEventListener("mouseup", async (e) => {
         knownWords[key].notes,
         knownWords[key].context,
         knownWords[key].article || "",
-        true
+        true,
+        context
       );
       return;
     }
   }
-
-  // Get surrounding context
-  const container = findBlockAncestor(range.commonAncestorContainer);
-  const context = (container.textContent || "").substring(0, 500);
 
   showLoading(rect);
 
@@ -236,7 +305,8 @@ document.addEventListener("mouseup", async (e) => {
         result.notes,
         result.context,
         result.article || "",
-        isSingleWord
+        isSingleWord,
+        context
       );
     } else {
       showError(rect, result.error || "Translation failed");
@@ -395,6 +465,11 @@ function findBlockAncestor(node) {
     el.closest("p, div, li, td, th, article, section, blockquote") ||
     document.body
   );
+}
+
+function elideMiddle(s, head = 90, tail = 90) {
+  if (s.length <= head + tail) return s;
+  return s.slice(0, head) + " … " + s.slice(-tail);
 }
 
 function escapeHtml(s) {

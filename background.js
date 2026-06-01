@@ -22,6 +22,12 @@ const TRANSLATE_SCHEMA = {
   required: ["translation"],
 };
 
+const REF_SCHEMA = {
+  type: "OBJECT",
+  properties: { translation: { type: "STRING" }, notes: { type: "STRING" } },
+  required: ["translation", "notes"],
+};
+
 async function callGemini(prompt, schema) {
   const { apiKey } = await chrome.storage.local.get("apiKey");
   if (!apiKey) throw new Error("API key not set");
@@ -58,13 +64,46 @@ async function callGemini(prompt, schema) {
   return JSON.parse(cleaned);
 }
 
+// --- Anthropic API (Opus "Explain") ---
+
+async function callOpus(prompt) {
+  const { anthropicKey } = await chrome.storage.local.get("anthropicKey");
+  if (!anthropicKey) throw new Error("Anthropic API key not set");
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": anthropicKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: "claude-opus-4-8",
+      max_tokens: 1024,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Anthropic API error ${resp.status}: ${text}`);
+  }
+
+  const data = await resp.json();
+  const text =
+    data.content && data.content[0] && data.content[0].text;
+  if (!text) throw new Error("Unexpected Anthropic response");
+  return text;
+}
+
 function buildWordPrompt(word, context) {
   return `The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "${word}", which appeared in the text below.
 
 Provide four fields:
 - article: if "${word}" is a German common noun, return its definite article ("der", "die", or "das"). Otherwise (verbs, adjectives, English/Russian words, anything that is not a noun) return an empty string.
 - translation: "${word}" translated into Russian — or into English if the word is itself Russian. Expand abbreviations using the text. For Japanese words, append the pronunciation in brackets.
-- notes: a short explanation, max ~25 words, that makes the word stick. When the translation alone loses nuance, say what the word actually means; always add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.
+- notes: If the studied word is a proper noun naming a real person, place, work, or brand, give a one-sentence encyclopedic abstract — who or what it is and what it is best known for (max ~30 words). Otherwise a short explanation (max ~25 words) that makes the word stick: when the translation loses nuance say what it actually means, and add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.
 - context: the single sentence from the text below that best shows the word in use, trimmed to just that sentence, with the studied word wrapped in <b></b>. If the text below has no usable sentence, invent a short natural one.
 
 Examples:
@@ -87,6 +126,34 @@ function buildTranslatePrompt(text) {
 ===
 ${text}
 ===`;
+}
+
+function buildRefPrompt(text, context) {
+  return `The reader is a native Russian speaker, fluent in English. Translate and explain the text between the === markers, which they selected while reading the context below.
+
+Provide two fields:
+- translation: the selected text translated into Russian — or into English if it is itself Russian. Expand abbreviations using the context. Translate only the text between the markers.
+- notes: a short note (max ~50 words, in the same language as the selected text) that helps the reader truly understand it. If it contains or alludes to a literary, biblical, historical, or cultural reference, a named work or person, a joke, an allusion, an idiom, or a double meaning — explain what it refers to and, if it is used ironically or rhetorically or as a joke, what the actual point is. If it quotes or names something famous, consider whether it is commonly misattributed or whether its modern usage differs from the original meaning, and say so. If the text is plain with no such reference, briefly clarify its meaning, nuance, or tone. Never leave notes empty.
+
+Selected text:
+===
+${text}
+===
+
+Context:
+${context}`;
+}
+
+function buildExplainPrompt(text, context) {
+  return `You are helping a reader (native Russian speaker, fluent in English) understand something they selected while reading a web page. Explain the selected text in depth and clearly: any literary, biblical, historical, or cultural references; named people, works, or places (who or what they are and why they matter); jokes, irony, allusions, idioms, or double meanings, and what the point is. If it quotes or names something famous, note whether it is commonly misattributed or whether its modern usage differs from the original meaning. Write in the same language as the selected text. Be thorough but concise — a few short paragraphs at most.
+
+Selected text:
+===
+${text}
+===
+
+Surrounding context:
+${context}`;
 }
 
 function buildSummaryPrompt(text) {
@@ -160,6 +227,10 @@ async function loadWords() {
 
 async function addWord(word, translation, notes, context, article) {
   // context comes from the model already containing <b>...</b> — store as-is.
+  // Coerce any article that is not exactly der/die/das to "" before building.
+  if (article !== "der" && article !== "die" && article !== "das") {
+    article = "";
+  }
   const key = word.toLowerCase();
   const front_full = article ? `${article} ${word}` : word;
   const entry = {
@@ -204,20 +275,29 @@ async function deleteWord(word) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === "translate") {
-    let prompt;
+    let prompt, schema;
     if (msg.isSingleWord) {
       prompt = buildWordPrompt(msg.text, msg.context);
+      schema = WORD_SCHEMA;
     } else if (countWords(msg.text) > 100) {
       prompt = buildSummaryPrompt(msg.text);
+      schema = TRANSLATE_SCHEMA;
     } else {
-      prompt = buildTranslatePrompt(msg.text);
+      prompt = buildRefPrompt(msg.text, msg.context);
+      schema = REF_SCHEMA;
     }
-    const schema = msg.isSingleWord ? WORD_SCHEMA : TRANSLATE_SCHEMA;
 
     callGemini(prompt, schema)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true; // async response
+  }
+
+  if (msg.action === "explain") {
+    callOpus(buildExplainPrompt(msg.text, msg.context))
+      .then((text) => sendResponse({ ok: true, text }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
   }
 
   if (msg.action === "addWord") {

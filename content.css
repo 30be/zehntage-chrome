@@ -76,6 +76,41 @@
   cursor: default;
 }
 
+.zehntage-popup .btn-explain,
+.zehntage-popup .btn-discuss {
+  display: inline-block;
+  margin-top: 8px;
+  margin-right: 6px;
+  padding: 4px 12px;
+  background: #45475a;
+  color: #cdd6f4;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.zehntage-popup .btn-explain:hover,
+.zehntage-popup .btn-discuss:hover {
+  background: #585b70;
+}
+
+.zehntage-popup .btn-explain:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.zehntage-popup .explanation {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #45475a;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #cdd6f4;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 .zehntage-popup .error {
   color: #f38ba8;
 }

@@ -1,4 +1,5 @@
 const keyInput = document.getElementById("key");
+const anthropicKeyInput = document.getElementById("anthropic-key");
 const ankiUrlInput = document.getElementById("anki-url");
 const ankiKeyInput = document.getElementById("anki-key");
 const sitesInput = document.getElementById("sites");
@@ -8,11 +9,14 @@ const wordCountEl = document.getElementById("word-count");
 
 // Load existing settings
 chrome.storage.local.get(
-  ["apiKey", "ankiUrl", "ankiKey", "sitePatterns", "words"],
-  ({ apiKey, ankiUrl, ankiKey, sitePatterns, words }) => {
+  ["apiKey", "anthropicKey", "ankiUrl", "ankiKey", "sitePatterns", "words"],
+  ({ apiKey, anthropicKey, ankiUrl, ankiKey, sitePatterns, words }) => {
     if (apiKey) {
       keyInput.value = apiKey;
       statusEl.textContent = "Key saved.";
+    }
+    if (anthropicKey) {
+      anthropicKeyInput.value = anthropicKey;
     }
     if (ankiUrl) {
       ankiUrlInput.value = ankiUrl;
@@ -35,6 +39,8 @@ saveBtn.addEventListener("click", () => {
     return;
   }
 
+  const anthropicKey = anthropicKeyInput.value.trim();
+
   // Normalize the MCP URL: strip a trailing /mcp and any trailing slashes.
   const ankiUrl = ankiUrlInput.value
     .trim()
@@ -49,7 +55,7 @@ saveBtn.addEventListener("click", () => {
     .filter((l) => l.length > 0);
 
   chrome.storage.local.set(
-    { apiKey: key, ankiUrl, ankiKey, sitePatterns },
+    { apiKey: key, anthropicKey, ankiUrl, ankiKey, sitePatterns },
     () => {
       ankiUrlInput.value = ankiUrl;
       statusEl.textContent = "Saved!";
