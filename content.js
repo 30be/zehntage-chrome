@@ -256,30 +256,58 @@ The part I selected: «${text}».
 
 // --- Selection handling ---
 
-// True when a mousedown already dismissed the popup as part of this same
-// click gesture. The mouseup that follows must NOT re-open the popup, even
-// if the browser hasn't cleared the (now stale) selection yet.
+// Set when a mousedown dismissed an open popup during the current gesture.
+// The matching mouseup uses it (via isPureDismissal) to avoid re-opening from
+// a stale selection — but only when the selection did not actually change.
 let dismissedByMousedown = false;
+// The selection text as it stood at the start of the current mouse gesture,
+// so the matching mouseup can tell a pure dismissal (selection unchanged)
+// from the start of a brand-new selection (selection changed).
+let selectionAtMousedown = "";
+// Monotonic id for the in-flight translate lookup. Bumped when a new lookup
+// starts or the popup is dismissed, so a slow/out-of-order response can tell
+// it was superseded and must not draw a stale (or already-dismissed) popup.
+let requestSeq = 0;
+
+// A mousedown dismissed an open popup. Decide whether the matching mouseup is
+// a PURE DISMISSAL (just closed the popup — suppress) versus the start of a
+// NEW selection made in the same gesture (press-drag, or multi-click-then-drag
+// — must be honored). Suppress only when the selection did not change.
+function isPureDismissal(dismissedThisGesture, textAtMousedown, currentText) {
+  if (!dismissedThisGesture) return false;
+  if (!currentText) return true;          // nothing selected → only a dismissal
+  return currentText === textAtMousedown; // unchanged → stale leftover, not new
+}
+
+// A response is current only if no newer lookup started and the popup was
+// not dismissed while we awaited it.
+function shouldRender(myGen, currentSeq) {
+  return myGen === currentSeq;
+}
 
 document.addEventListener("mouseup", async (e) => {
   if (!enabled) return;
   if (popup && popup.contains(e.target)) return;
 
-  // A mousedown in this same gesture already closed the popup. Treat the
-  // click as a pure dismissal and ignore any leftover/stale selection.
-  if (dismissedByMousedown) {
-    dismissedByMousedown = false;
-    return;
-  }
-
   const sel = window.getSelection();
   const text = sel.toString().trim();
+
+  // A mousedown in this gesture closed the popup. Suppress re-opening ONLY
+  // when this was a pure dismissal — not when the same gesture (press-drag,
+  // or multi-click-then-drag) produced a new selection to translate.
+  const dismissed = dismissedByMousedown;
+  dismissedByMousedown = false;
+  if (isPureDismissal(dismissed, selectionAtMousedown, text)) return;
 
   // No real, non-collapsed selection → nothing to translate.
   if (!text || sel.rangeCount === 0 || sel.getRangeAt(0).collapsed) {
     removePopup();
     return;
   }
+
+  // A new selection supersedes any earlier in-flight lookup: tag this one so
+  // a slow/out-of-order response from a previous selection can't overwrite it.
+  const myGen = ++requestSeq;
 
   const range = sel.getRangeAt(0);
   const rect = range.getBoundingClientRect();
@@ -333,6 +361,9 @@ document.addEventListener("mouseup", async (e) => {
       isSingleWord,
     });
 
+    // Superseded by a newer selection or dismissed while we waited → drop it.
+    if (!shouldRender(myGen, requestSeq)) return;
+
     if (result.ok) {
       lookupCache[cacheKey] = {
         translation: result.translation,
@@ -354,19 +385,25 @@ document.addEventListener("mouseup", async (e) => {
       showError(rect, result.error || "Translation failed");
     }
   } catch (err) {
+    if (!shouldRender(myGen, requestSeq)) return;
     showError(rect, err.message);
   }
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") removePopup();
+  if (e.key === "Escape") {
+    requestSeq++;
+    removePopup();
+  }
 });
 
 document.addEventListener("mousedown", (e) => {
+  // Snapshot the selection at gesture start so the matching mouseup can tell
+  // a dismissal (selection unchanged) from the start of a new selection.
+  selectionAtMousedown = window.getSelection().toString().trim();
   if (popup && !popup.contains(e.target)) {
+    requestSeq++; // invalidate any in-flight lookup so it can't re-open the popup
     removePopup();
-    // Flag so the matching mouseup doesn't re-open the popup from a
-    // stale selection that the browser hasn't cleared yet.
     dismissedByMousedown = true;
   }
 });
