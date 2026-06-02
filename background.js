@@ -64,39 +64,6 @@ async function callGemini(prompt, schema) {
   return JSON.parse(cleaned);
 }
 
-// --- Anthropic API (Opus "Explain") ---
-
-async function callOpus(prompt) {
-  const { anthropicKey } = await chrome.storage.local.get("anthropicKey");
-  if (!anthropicKey) throw new Error("Anthropic API key not set");
-
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": anthropicKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: "claude-opus-4-8",
-      max_tokens: 300,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Anthropic API error ${resp.status}: ${text}`);
-  }
-
-  const data = await resp.json();
-  const text =
-    data.content && data.content[0] && data.content[0].text;
-  if (!text) throw new Error("Unexpected Anthropic response");
-  return text;
-}
-
 function buildWordPrompt(word, context) {
   return `The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "${word}", which appeared in the text below.
 
@@ -141,18 +108,6 @@ ${text}
 ===
 
 Context:
-${context}`;
-}
-
-function buildExplainPrompt(text, context) {
-  return `You are helping a reader (native Russian speaker, fluent in English) understand something they selected while reading a web page. In just a couple of sentences (no more than ~50 words, as short as a quick note), explain what it really means: any reference, named person or work, joke, irony, allusion, or double meaning, and the point of it. If it quotes or names something famous, note whether it is commonly misattributed or whether its modern usage differs from the original meaning. Write in the same language as the selected text.
-
-Selected text:
-===
-${text}
-===
-
-Surrounding context:
 ${context}`;
 }
 
@@ -291,13 +246,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true; // async response
-  }
-
-  if (msg.action === "explain") {
-    callOpus(buildExplainPrompt(msg.text, msg.context))
-      .then((text) => sendResponse({ ok: true, text }))
-      .catch((err) => sendResponse({ ok: false, error: err.message }));
-    return true;
   }
 
   if (msg.action === "addWord") {

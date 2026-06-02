@@ -8,8 +8,7 @@
     "activeTab"
   ],
   "host_permissions": [
-    "https://*/*",
-    "https://api.anthropic.com/*"
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js"

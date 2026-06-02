@@ -2,7 +2,6 @@ let popup = null;
 
 // In-memory caches, keyed by selected text. Per page — cleared on reload.
 const lookupCache = {};
-const explainCache = {};
 let knownWords = {};
 let enabled = false;
 
@@ -86,7 +85,6 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
   }
 
   const refContext = pageContext || context || "";
-  actions += `<button class="btn-explain" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Explain</button>`;
   actions += `<button class="btn-discuss" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Discuss</button>`;
   html += `<div class="actions">${actions}</div>`;
 
@@ -105,14 +103,6 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       handleDeleteWord(delBtn);
-    });
-  }
-
-  const explainBtn = el.querySelector(".btn-explain");
-  if (explainBtn) {
-    explainBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      handleExplain(explainBtn);
     });
   }
 
@@ -191,51 +181,6 @@ async function handleDeleteWord(btn) {
   } catch {
     btn.disabled = false;
     btn.textContent = "Error";
-  }
-}
-
-async function handleExplain(btn) {
-  const text = btn.dataset.text;
-  const context = btn.dataset.context || "";
-  const popupEl = btn.closest(".zehntage-popup") || btn.parentNode;
-
-  // Already explained in this popup → don't duplicate.
-  if (popupEl.querySelector(".explanation")) return;
-
-  const render = (explanation) => {
-    const div = document.createElement("div");
-    div.className = "explanation";
-    div.innerHTML = escapeHtml(explanation).replace(/\n/g, "<br>");
-    popupEl.appendChild(div);
-  };
-
-  if (explainCache[text]) {
-    render(explainCache[text]);
-    return;
-  }
-
-  btn.disabled = true;
-  btn.textContent = "Thinking…";
-
-  try {
-    const resp = await chrome.runtime.sendMessage({
-      action: "explain",
-      text,
-      context,
-    });
-
-    if (resp.ok) {
-      explainCache[text] = resp.text;
-      render(resp.text);
-      btn.textContent = "Explain";
-      btn.disabled = false;
-    } else {
-      btn.textContent = "Error";
-      btn.disabled = false;
-    }
-  } catch {
-    btn.textContent = "Error";
-    btn.disabled = false;
   }
 }
 
