@@ -4,6 +4,17 @@ let popup = null;
 const lookupCache = {};
 let knownWords = {};
 let enabled = false;
+// True once a Gemini API key is stored — gates lookups and offers settings.
+let apiKeyPresent = false;
+// Anchor rect of the most recent popup, so the sheet's gear can reopen settings.
+let lastRect = null;
+
+// Phones/tablets: coarse pointer, no hover. Drives the bottom-sheet UI and a
+// selectionchange-based trigger (mobile text selection doesn't fire mouseup the
+// way a desktop mouse gesture does).
+function isMobile() {
+  return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+}
 
 // --- Site filtering ---
 
@@ -34,11 +45,46 @@ function removePopup() {
 
 function createPopup(rect, html) {
   removePopup();
+  lastRect = rect;
+  const mobile = isMobile();
+
   popup = document.createElement("div");
   popup.className = "zehntage-popup";
-  popup.innerHTML = html;
+
+  if (mobile) {
+    // Bottom sheet: a grip, a settings gear, and a close button on top.
+    popup.classList.add("zehntage-popup--sheet");
+    popup.innerHTML =
+      '<div class="zehntage-sheet-header">' +
+      '<span class="zehntage-header-actions">' +
+      '<button class="zehntage-gear" title="Settings" aria-label="Settings">⚙</button>' +
+      '<button class="zehntage-close-x" title="Close" aria-label="Close">✕</button>' +
+      "</span></div>" +
+      html;
+  } else {
+    popup.innerHTML = html;
+  }
 
   document.body.appendChild(popup);
+
+  if (mobile) {
+    const gear = popup.querySelector(".zehntage-gear");
+    if (gear) {
+      gear.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showSettings(lastRect);
+      });
+    }
+    const closeX = popup.querySelector(".zehntage-close-x");
+    if (closeX) {
+      closeX.addEventListener("click", (e) => {
+        e.stopPropagation();
+        requestSeq++;
+        removePopup();
+      });
+    }
+    return popup; // sheet is anchored by CSS — no inline positioning needed
+  }
 
   const top = rect.bottom + window.scrollY + 6;
   const left = Math.max(8, rect.left + window.scrollX);
@@ -117,6 +163,89 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
 
 function showError(rect, message) {
   createPopup(rect, `<span class="error">${escapeHtml(message)}</span>`);
+}
+
+// In-page settings (Gemini key, Anki, site filters). Reachable on mobile where
+// the toolbar popup is awkward — via the sheet's gear, or auto-shown when no key
+// is set yet. Writes the same storage keys the toolbar popup uses.
+async function showSettings(rect, message) {
+  const {
+    apiKey = "",
+    ankiUrl = "",
+    ankiKey = "",
+    sitePatterns = [],
+  } = await chrome.storage.local.get([
+    "apiKey",
+    "ankiUrl",
+    "ankiKey",
+    "sitePatterns",
+  ]);
+
+  const html =
+    (message
+      ? `<div class="zehntage-settings-msg">${escapeHtml(message)}</div>`
+      : "") +
+    `<label class="zehntage-field">Gemini API Key
+      <input type="password" class="zehntage-input" data-k="apiKey" value="${escapeAttr(apiKey)}" placeholder="paste key here"></label>
+    <label class="zehntage-field">Anki MCP URL
+      <input type="text" class="zehntage-input" data-k="ankiUrl" value="${escapeAttr(ankiUrl)}" placeholder="https://..."></label>
+    <label class="zehntage-field">Anki Key
+      <input type="password" class="zehntage-input" data-k="ankiKey" value="${escapeAttr(ankiKey)}" placeholder="paste key here"></label>
+    <label class="zehntage-field">Active sites (one regex per line)
+      <textarea class="zehntage-input zehntage-textarea" data-k="sitePatterns" rows="3" placeholder=".*">${escapeHtml(sitePatterns.join("\n"))}</textarea></label>
+    <div class="actions">
+      <button class="btn-anki zehntage-save">Save</button>
+      <button class="btn-discuss zehntage-close">Close</button>
+    </div>
+    <div class="zehntage-settings-status"></div>`;
+
+  const el = createPopup(rect, html);
+  const statusEl = el.querySelector(".zehntage-settings-status");
+  const val = (k) => {
+    const f = el.querySelector(`[data-k="${k}"]`);
+    return f ? f.value : "";
+  };
+
+  el.querySelector(".zehntage-save").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const apiKeyV = val("apiKey").trim();
+    if (!apiKeyV) {
+      statusEl.textContent = "Enter the Gemini key first.";
+      return;
+    }
+    const ankiUrlV = val("ankiUrl")
+      .trim()
+      .replace(/\/+$/, "")
+      .replace(/\/mcp$/, "")
+      .replace(/\/+$/, "");
+    const patterns = val("sitePatterns")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+    await chrome.storage.local.set({
+      apiKey: apiKeyV,
+      ankiUrl: ankiUrlV,
+      ankiKey: val("ankiKey").trim(),
+      sitePatterns: patterns,
+    });
+    apiKeyPresent = true;
+    await checkSiteEnabled();
+    statusEl.textContent = "Saved!";
+
+    // If a selection is still live, translate it right away; else just close.
+    setTimeout(() => {
+      const t = window.getSelection().toString().trim();
+      if (t && enabled) lookupSelection();
+      else removePopup();
+    }, 600);
+  });
+
+  el.querySelector(".zehntage-close").addEventListener("click", (e) => {
+    e.stopPropagation();
+    requestSeq++;
+    removePopup();
+  });
 }
 
 async function handleAddWord(btn) {
@@ -230,19 +359,11 @@ function shouldRender(myGen, currentSeq) {
   return myGen === currentSeq;
 }
 
-document.addEventListener("mouseup", async (e) => {
-  if (!enabled) return;
-  if (popup && popup.contains(e.target)) return;
-
+// Run a lookup for the current selection and render the result. Shared by the
+// desktop (mouseup) and mobile (selectionchange) triggers.
+async function lookupSelection() {
   const sel = window.getSelection();
   const text = sel.toString().trim();
-
-  // A mousedown in this gesture closed the popup. Suppress re-opening ONLY
-  // when this was a pure dismissal — not when the same gesture (press-drag,
-  // or multi-click-then-drag) produced a new selection to translate.
-  const dismissed = dismissedByMousedown;
-  dismissedByMousedown = false;
-  if (isPureDismissal(dismissed, selectionAtMousedown, text)) return;
 
   // No real, non-collapsed selection → nothing to translate.
   if (!text || sel.rangeCount === 0 || sel.getRangeAt(0).collapsed) {
@@ -261,6 +382,12 @@ document.addEventListener("mouseup", async (e) => {
   // Get surrounding context
   const container = findBlockAncestor(range.commonAncestorContainer);
   const context = (container.textContent || "").substring(0, 500);
+
+  // No key yet → show the settings sheet instead of a guaranteed failure.
+  if (!apiKeyPresent) {
+    showSettings(rect, "Set your Gemini API key to start.");
+    return;
+  }
 
   // Check if single word is already known — use local cache, no async
   if (isSingleWord) {
@@ -333,6 +460,25 @@ document.addEventListener("mouseup", async (e) => {
     if (!shouldRender(myGen, requestSeq)) return;
     showError(rect, err.message);
   }
+}
+
+// Desktop: a finished mouse gesture drives selection lookups.
+document.addEventListener("mouseup", async (e) => {
+  if (isMobile()) return;
+  if (!enabled) return;
+  if (popup && popup.contains(e.target)) return;
+
+  const sel = window.getSelection();
+  const text = sel.toString().trim();
+
+  // A mousedown in this gesture closed the popup. Suppress re-opening ONLY
+  // when this was a pure dismissal — not when the same gesture (press-drag,
+  // or multi-click-then-drag) produced a new selection to translate.
+  const dismissed = dismissedByMousedown;
+  dismissedByMousedown = false;
+  if (isPureDismissal(dismissed, selectionAtMousedown, text)) return;
+
+  await lookupSelection();
 });
 
 document.addEventListener("keydown", (e) => {
@@ -343,6 +489,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("mousedown", (e) => {
+  if (isMobile()) return;
   // Snapshot the selection at gesture start so the matching mouseup can tell
   // a dismissal (selection unchanged) from the start of a new selection.
   selectionAtMousedown = window.getSelection().toString().trim();
@@ -351,6 +498,22 @@ document.addEventListener("mousedown", (e) => {
     removePopup();
     dismissedByMousedown = true;
   }
+});
+
+// Mobile: selection is made with long-press + drag handles, which don't give a
+// reliable mouseup. Watch selectionchange instead, debounced until the
+// selection settles, then run the same lookup.
+let selChangeTimer = null;
+document.addEventListener("selectionchange", () => {
+  if (!isMobile() || !enabled) return;
+  const text = window.getSelection().toString().trim();
+  if (!text) return; // collapsing the selection shouldn't tear down an open sheet
+  clearTimeout(selChangeTimer);
+  selChangeTimer = setTimeout(() => {
+    // Don't clobber a settings sheet the user is currently filling in.
+    if (popup && popup.querySelector(".zehntage-save")) return;
+    if (window.getSelection().toString().trim()) lookupSelection();
+  }, 400);
 });
 
 // --- Word highlighting ---
@@ -453,6 +616,9 @@ async function init() {
   await checkSiteEnabled();
   if (!enabled) return;
 
+  const { apiKey } = await chrome.storage.local.get("apiKey");
+  apiKeyPresent = !!apiKey;
+
   try {
     const resp = await chrome.runtime.sendMessage({ action: "getWords" });
     if (resp.ok && resp.words) {
@@ -467,6 +633,17 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
+
+// Keep this tab in sync when settings change elsewhere (toolbar popup, options
+// page, or another tab): refresh the key gate and re-highlight on word changes.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.apiKey) apiKeyPresent = !!changes.apiKey.newValue;
+  if (changes.words) {
+    knownWords = changes.words.newValue || {};
+    if (enabled) safeHighlight();
+  }
+});
 
 // Re-highlight on dynamic content changes (SPAs), debounced
 let highlightTimer = null;

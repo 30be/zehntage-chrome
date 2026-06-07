@@ -112,3 +112,121 @@ mark.zehntage-word {
   text-decoration-thickness: 2px;
   text-underline-offset: 2px;
 }
+
+/* --- Mobile bottom sheet (Google-Assistant style) --- */
+.zehntage-popup.zehntage-popup--sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: auto;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  border-radius: 16px 16px 0 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  padding: 10px 18px calc(16px + env(safe-area-inset-bottom, 0px));
+  max-height: 70vh;
+  overflow-y: auto;
+  font-size: 16px;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.45);
+  animation: zehntage-slide-up 0.2s ease-out;
+}
+
+@keyframes zehntage-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.zehntage-popup--sheet .zehntage-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.zehntage-popup--sheet .zehntage-header-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.zehntage-popup--sheet .zehntage-gear,
+.zehntage-popup--sheet .zehntage-close-x {
+  background: transparent;
+  border: none;
+  color: #a6adc8;
+  font-size: 18px;
+  line-height: 1;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.zehntage-popup--sheet .zehntage-gear:active,
+.zehntage-popup--sheet .zehntage-close-x:active {
+  background: #313244;
+}
+
+.zehntage-popup--sheet .notes {
+  font-size: 15px;
+}
+
+/* Bigger tap targets inside the sheet */
+.zehntage-popup--sheet .actions {
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.zehntage-popup--sheet .btn-anki,
+.zehntage-popup--sheet .btn-delete,
+.zehntage-popup--sheet .btn-discuss {
+  font-size: 15px;
+  padding: 10px 16px;
+  min-height: 44px;
+}
+
+/* --- In-page settings form (mobile-friendly, no toolbar popup needed) --- */
+.zehntage-popup .zehntage-settings-msg {
+  margin-bottom: 10px;
+  color: #f9e2af;
+  font-size: 14px;
+}
+
+.zehntage-popup .zehntage-field {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: #a6adc8;
+}
+
+.zehntage-popup .zehntage-input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  background: #313244;
+  color: #cdd6f4;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.zehntage-popup .zehntage-textarea {
+  font-family: monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.zehntage-popup .zehntage-settings-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #a6adc8;
+}
