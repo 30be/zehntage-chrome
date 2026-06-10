@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Gemini prompts now include the page URL (`Page URL: ...`, capped at 200
+  chars) alongside the surrounding context, for both single-word and phrase
+  lookups.
+
 ## 0.1.2
 
 Firefox (desktop & Android) support, from the single Chrome MV3 source via

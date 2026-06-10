@@ -430,6 +430,7 @@ async function lookupSelection() {
       action: "translate",
       text,
       context,
+      url: location.href.substring(0, 200),
       isSingleWord,
     });
 

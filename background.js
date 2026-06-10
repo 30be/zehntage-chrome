@@ -64,7 +64,7 @@ async function callGemini(prompt, schema) {
   return JSON.parse(cleaned);
 }
 
-function buildWordPrompt(word, context) {
+function buildWordPrompt(word, context, url) {
   return `The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "${word}", which appeared in the text below.
 
 Provide four fields:
@@ -77,6 +77,8 @@ Examples:
 - "vollenden" → article: "", translation: "завершить", notes: "voll ('full') + enden ('to end') — to bring something fully to its end."
 - "Handschuh" → article: "der", translation: "перчатка", notes: "Hand + Schuh ('shoe') — literally a 'shoe for the hand'."
 - "Wetter" → article: "das", translation: "погода", notes: "the English cognate 'weather' — literally the same word."
+
+Page URL: ${url || ""}
 
 Text:
 ${context}`;
@@ -95,7 +97,7 @@ ${text}
 ===`;
 }
 
-function buildRefPrompt(text, context) {
+function buildRefPrompt(text, context, url) {
   return `The reader is a native Russian speaker, fluent in English. Translate and explain the text between the === markers, which they selected while reading the context below.
 
 Provide two fields:
@@ -106,6 +108,8 @@ Selected text:
 ===
 ${text}
 ===
+
+Page URL: ${url || ""}
 
 Context:
 ${context}`;
@@ -231,14 +235,15 @@ async function deleteWord(word) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === "translate") {
     let prompt, schema;
+    const url = (msg.url || "").substring(0, 200);
     if (msg.isSingleWord) {
-      prompt = buildWordPrompt(msg.text, msg.context);
+      prompt = buildWordPrompt(msg.text, msg.context, url);
       schema = WORD_SCHEMA;
     } else if (countWords(msg.text) > 100) {
       prompt = buildSummaryPrompt(msg.text);
       schema = TRANSLATE_SCHEMA;
     } else {
-      prompt = buildRefPrompt(msg.text, msg.context);
+      prompt = buildRefPrompt(msg.text, msg.context, url);
       schema = REF_SCHEMA;
     }
 

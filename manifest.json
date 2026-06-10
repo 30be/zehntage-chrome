@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ZehnTage",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Translate selected text, learn vocabulary, export to Anki",
   "permissions": [
     "storage",
