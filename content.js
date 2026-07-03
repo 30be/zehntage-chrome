@@ -16,6 +16,14 @@ function isMobile() {
   return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 }
 
+// Which stored key gates the currently selected provider.
+function hasKeyForProvider(provider, keys) {
+  if (provider === "groq") return !!keys.groqApiKey;
+  if (provider === "claude") return !!keys.claudeApiKey;
+  if (provider === "cerebras") return !!keys.cerebrasApiKey;
+  return !!keys.apiKey;
+}
+
 // --- Site filtering ---
 
 async function checkSiteEnabled() {
@@ -103,21 +111,36 @@ function createPopup(rect, html) {
   return popup;
 }
 
+const SPEAKER_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">' +
+  '<path d="M4 9v6h4l5 5V4L8 9H4z"/>' +
+  '<path d="M16.5 12a4.5 4.5 0 0 0-2-3.74v7.48a4.5 4.5 0 0 0 2-3.74z"/>' +
+  "</svg>";
+
 function showLoading(rect) {
   createPopup(rect, '<span class="zehntage-loading">Translating...</span>');
 }
 
-function showTranslation(rect, word, translation, notes, context, article, isSingleWord, pageContext) {
+function showTranslation(rect, word, translation, notes, context, article, isSingleWord, pageContext, elapsed, lang) {
   const wordLower = word.toLowerCase();
   const alreadySaved = knownWords.hasOwnProperty(wordLower);
   const display = article ? `${article} ${word}` : word;
   // Elide the source side only; keep the translation full.
   const displayElided = elideMiddle(display);
+  // Old cached/known words predate the lang field — a German article is still
+  // a reliable enough hint to pronounce them correctly.
+  const speakLang = lang || (article ? "de-DE" : "");
 
   let html = `<span class="word">${escapeHtml(displayElided).replace(/\n/g, "<br>")}</span> → ${escapeHtml(translation).replace(/\n/g, "<br>")}`;
+  if (isSingleWord) {
+    html += ` <button class="btn-speak" data-text="${escapeAttr(display)}" data-lang="${escapeAttr(speakLang)}" title="Pronounce" aria-label="Pronounce">${SPEAKER_ICON}</button>`;
+  }
 
   if (notes) {
     html += `<div class="notes">${escapeHtml(notes)}</div>`;
+  }
+  if (elapsed) {
+    html += `<div class="zehntage-elapsed">${escapeHtml(elapsed)}</div>`;
   }
 
   let actions = "";
@@ -135,6 +158,14 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
   html += `<div class="actions">${actions}</div>`;
 
   const el = createPopup(rect, html);
+
+  const speakBtn = el.querySelector(".btn-speak");
+  if (speakBtn) {
+    speakBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      speak(speakBtn.dataset.text, speakBtn.dataset.lang);
+    });
+  }
 
   const btn = el.querySelector(".btn-anki");
   if (btn) {
@@ -165,28 +196,78 @@ function showError(rect, message) {
   createPopup(rect, `<span class="error">${escapeHtml(message)}</span>`);
 }
 
+// Pronounce a word via Google Translate's TTS endpoint. No API key — and
+// unlike the Web Speech API, it doesn't depend on the OS having any voices
+// installed (many Linux desktops have none, which makes speechSynthesis fail
+// silently with a "not-allowed" error and zero voices in getVoices()).
+// The fetch happens in the background script: translate_tts requires a
+// Referer header content scripts can't set, and returns a non-audio body
+// without one.
+let speakAudio = null;
+async function speak(text, lang) {
+  if (!text) return;
+  if (speakAudio) speakAudio.pause(); // interrupt anything already playing
+  try {
+    const resp = await chrome.runtime.sendMessage({ action: "speak", text, lang });
+    if (resp && resp.ok) {
+      speakAudio = new Audio(resp.dataUrl);
+      speakAudio.play().catch(() => {});
+    }
+  } catch {}
+}
+
 // In-page settings (Gemini key, Anki, site filters). Reachable on mobile where
 // the toolbar popup is awkward — via the sheet's gear, or auto-shown when no key
 // is set yet. Writes the same storage keys the toolbar popup uses.
 async function showSettings(rect, message) {
   const {
     apiKey = "",
+    groqApiKey = "",
+    claudeApiKey = "",
+    cerebrasApiKey = "",
+    provider = "gemini",
+    groqModel = "",
     ankiUrl = "",
     ankiKey = "",
     sitePatterns = [],
   } = await chrome.storage.local.get([
     "apiKey",
+    "groqApiKey",
+    "claudeApiKey",
+    "cerebrasApiKey",
+    "provider",
+    "groqModel",
     "ankiUrl",
     "ankiKey",
     "sitePatterns",
   ]);
 
+  const selected = (v) =>
+    (provider === "groq" ? (groqModel === "qwen/qwen3.6-27b" ? "groq-qwen" : groqModel === "openai/gpt-oss-20b" ? "groq-20b" : "groq-120b") : provider) === v
+      ? " selected"
+      : "";
+
   const html =
     (message
       ? `<div class="zehntage-settings-msg">${escapeHtml(message)}</div>`
       : "") +
-    `<label class="zehntage-field">Gemini API Key
+    `<label class="zehntage-field">Model
+      <select class="zehntage-input" data-k="provider">
+        <option value="gemini"${selected("gemini")}>Gemini 3.1 Flash Lite</option>
+        <option value="groq-120b"${selected("groq-120b")}>GPT OSS 120B (Groq)</option>
+        <option value="groq-20b"${selected("groq-20b")}>GPT OSS 20B (Groq)</option>
+        <option value="groq-qwen"${selected("groq-qwen")}>Qwen3.6 27B (Groq)</option>
+        <option value="claude"${selected("claude")}>Claude Sonnet 5</option>
+        <option value="cerebras"${selected("cerebras")}>GLM 4.7 (Cerebras)</option>
+      </select></label>
+    <label class="zehntage-field">Gemini API Key
       <input type="password" class="zehntage-input" data-k="apiKey" value="${escapeAttr(apiKey)}" placeholder="paste key here"></label>
+    <label class="zehntage-field">Groq API Key
+      <input type="password" class="zehntage-input" data-k="groqApiKey" value="${escapeAttr(groqApiKey)}" placeholder="paste key here"></label>
+    <label class="zehntage-field">Anthropic API Key
+      <input type="password" class="zehntage-input" data-k="claudeApiKey" value="${escapeAttr(claudeApiKey)}" placeholder="paste key here"></label>
+    <label class="zehntage-field">Cerebras API Key
+      <input type="password" class="zehntage-input" data-k="cerebrasApiKey" value="${escapeAttr(cerebrasApiKey)}" placeholder="paste key here"></label>
     <label class="zehntage-field">Anki MCP URL
       <input type="text" class="zehntage-input" data-k="ankiUrl" value="${escapeAttr(ankiUrl)}" placeholder="https://..."></label>
     <label class="zehntage-field">Anki Key
@@ -208,9 +289,26 @@ async function showSettings(rect, message) {
 
   el.querySelector(".zehntage-save").addEventListener("click", async (e) => {
     e.stopPropagation();
+    const choiceV = val("provider") || "gemini";
+    const providerV = choiceV.startsWith("groq") ? "groq" : choiceV;
+    const groqModelV =
+      choiceV === "groq-20b"
+        ? "openai/gpt-oss-20b"
+        : choiceV === "groq-qwen"
+          ? "qwen/qwen3.6-27b"
+          : "openai/gpt-oss-120b";
     const apiKeyV = val("apiKey").trim();
-    if (!apiKeyV) {
-      statusEl.textContent = "Enter the Gemini key first.";
+    const groqApiKeyV = val("groqApiKey").trim();
+    const claudeApiKeyV = val("claudeApiKey").trim();
+    const cerebrasApiKeyV = val("cerebrasApiKey").trim();
+    const keys = {
+      apiKey: apiKeyV,
+      groqApiKey: groqApiKeyV,
+      claudeApiKey: claudeApiKeyV,
+      cerebrasApiKey: cerebrasApiKeyV,
+    };
+    if (!hasKeyForProvider(providerV, keys)) {
+      statusEl.textContent = "Enter the API key for this model first.";
       return;
     }
     const ankiUrlV = val("ankiUrl")
@@ -224,12 +322,14 @@ async function showSettings(rect, message) {
       .filter((l) => l.length > 0);
 
     await chrome.storage.local.set({
-      apiKey: apiKeyV,
+      ...keys,
+      provider: providerV,
+      groqModel: groqModelV,
       ankiUrl: ankiUrlV,
       ankiKey: val("ankiKey").trim(),
       sitePatterns: patterns,
     });
-    apiKeyPresent = true;
+    apiKeyPresent = hasKeyForProvider(providerV, keys);
     await checkSiteEnabled();
     statusEl.textContent = "Saved!";
 
@@ -362,6 +462,11 @@ function shouldRender(myGen, currentSeq) {
 // Run a lookup for the current selection and render the result. Shared by the
 // desktop (mouseup) and mobile (selectionchange) triggers.
 async function lookupSelection() {
+  // Measured from the moment a selection is acted on to the moment the full
+  // answer is rendered — shown next to the result so slow responses are visible.
+  const startTime = performance.now();
+  const elapsedNow = () => ((performance.now() - startTime) / 1000).toFixed(1) + "s";
+
   const sel = window.getSelection();
   const text = sel.toString().trim();
 
@@ -401,7 +506,8 @@ async function lookupSelection() {
         knownWords[key].context,
         knownWords[key].article || "",
         true,
-        context
+        context,
+        elapsedNow()
       );
       return;
     }
@@ -418,20 +524,41 @@ async function lookupSelection() {
       c.context,
       c.article || "",
       isSingleWord,
-      context
+      context,
+      elapsedNow(),
+      c.lang || ""
     );
     return;
   }
 
   showLoading(rect);
+  // Grab the loading span so streamed chunks can update it in place, without
+  // tearing down and rebuilding the whole popup on every delta.
+  const loadingEl = popup ? popup.querySelector(".zehntage-loading") : null;
 
   try {
-    const result = await chrome.runtime.sendMessage({
-      action: "translate",
-      text,
-      context,
-      url: location.href.substring(0, 200),
-      isSingleWord,
+    const result = await new Promise((resolve) => {
+      const port = chrome.runtime.connect({ name: "translate" });
+      port.onMessage.addListener((msg) => {
+        if (msg.type === "chunk") {
+          if (loadingEl && shouldRender(myGen, requestSeq)) {
+            loadingEl.textContent = msg.text;
+          }
+        } else if (msg.type === "done") {
+          port.disconnect();
+          resolve({ ok: true, ...msg.result });
+        } else if (msg.type === "error") {
+          port.disconnect();
+          resolve({ ok: false, error: msg.error });
+        }
+      });
+      port.postMessage({
+        action: "translate",
+        text,
+        context,
+        url: location.href.substring(0, 200),
+        isSingleWord,
+      });
     });
 
     // Superseded by a newer selection or dismissed while we waited → drop it.
@@ -443,6 +570,7 @@ async function lookupSelection() {
         notes: result.notes,
         context: result.context,
         article: result.article || "",
+        lang: result.lang || "",
       };
       showTranslation(
         rect,
@@ -452,7 +580,9 @@ async function lookupSelection() {
         result.context,
         result.article || "",
         isSingleWord,
-        context
+        context,
+        elapsedNow(),
+        result.lang || ""
       );
     } else {
       showError(rect, result.error || "Translation failed");
@@ -617,8 +747,14 @@ async function init() {
   await checkSiteEnabled();
   if (!enabled) return;
 
-  const { apiKey } = await chrome.storage.local.get("apiKey");
-  apiKeyPresent = !!apiKey;
+  const keys = await chrome.storage.local.get([
+    "apiKey",
+    "groqApiKey",
+    "claudeApiKey",
+    "cerebrasApiKey",
+    "provider",
+  ]);
+  apiKeyPresent = hasKeyForProvider(keys.provider || "gemini", keys);
 
   try {
     const resp = await chrome.runtime.sendMessage({ action: "getWords" });
@@ -639,7 +775,19 @@ if (document.readyState === "loading") {
 // page, or another tab): refresh the key gate and re-highlight on word changes.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.apiKey) apiKeyPresent = !!changes.apiKey.newValue;
+  if (
+    changes.apiKey ||
+    changes.groqApiKey ||
+    changes.claudeApiKey ||
+    changes.cerebrasApiKey ||
+    changes.provider
+  ) {
+    chrome.storage.local
+      .get(["apiKey", "groqApiKey", "claudeApiKey", "cerebrasApiKey", "provider"])
+      .then((keys) => {
+        apiKeyPresent = hasKeyForProvider(keys.provider || "gemini", keys);
+      });
+  }
   if (changes.words) {
     knownWords = changes.words.newValue || {};
     if (enabled) safeHighlight();
@@ -669,9 +817,10 @@ function findBlockAncestor(node) {
   );
 }
 
-function elideMiddle(s, head = 90, tail = 90) {
-  if (s.length <= head + tail) return s;
-  return s.slice(0, head) + " … " + s.slice(-tail);
+function elideMiddle(s, keep = 3) {
+  const words = s.trim().split(/\s+/);
+  if (words.length <= keep * 2) return s;
+  return words.slice(0, keep).join(" ") + " … " + words.slice(-keep).join(" ");
 }
 
 function escapeHtml(s) {

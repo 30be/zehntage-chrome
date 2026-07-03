@@ -6,8 +6,23 @@
 </head>
 <body>
   <h3>ZehnTage</h3>
+  <label for="provider">Model</label>
+  <select id="provider">
+    <option value="gemini">Gemini 3.1 Flash Lite</option>
+    <option value="groq-120b">GPT OSS 120B (Groq)</option>
+    <option value="groq-20b">GPT OSS 20B (Groq)</option>
+    <option value="groq-qwen">Qwen3.6 27B (Groq)</option>
+    <option value="claude">Claude Sonnet 5</option>
+    <option value="cerebras">GLM 4.7 (Cerebras)</option>
+  </select>
   <label for="key">Gemini API Key</label>
   <input type="password" id="key" placeholder="paste key here">
+  <label for="groq-key">Groq API Key</label>
+  <input type="password" id="groq-key" placeholder="paste key here">
+  <label for="claude-key">Anthropic API Key</label>
+  <input type="password" id="claude-key" placeholder="paste key here">
+  <label for="cerebras-key">Cerebras API Key</label>
+  <input type="password" id="cerebras-key" placeholder="paste key here">
   <label for="anki-url">Anki MCP URL</label>
   <input type="text" id="anki-url" placeholder="https://example.com/...">
   <label for="anki-key">Anki Key</label>
