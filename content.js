@@ -1,4 +1,7 @@
 let popup = null;
+// The port for an in-flight translate request, if any — so closing the
+// popup can tell the background script to stop retrying.
+let activeTranslatePort = null;
 
 // In-memory caches, keyed by selected text. Per page — cleared on reload.
 const lookupCache = {};
@@ -45,6 +48,12 @@ async function checkSiteEnabled() {
 // --- Popup management ---
 
 function removePopup() {
+  if (activeTranslatePort) {
+    try {
+      activeTranslatePort.disconnect();
+    } catch {}
+    activeTranslatePort = null;
+  }
   if (popup) {
     popup.remove();
     popup = null;
@@ -539,17 +548,24 @@ async function lookupSelection() {
   try {
     const result = await new Promise((resolve) => {
       const port = chrome.runtime.connect({ name: "translate" });
+      activeTranslatePort = port;
       port.onMessage.addListener((msg) => {
         if (msg.type === "chunk") {
           if (loadingEl && shouldRender(myGen, requestSeq)) {
+            loadingEl.classList.remove("zehntage-retrying");
             loadingEl.textContent = msg.text;
+          }
+        } else if (msg.type === "retry") {
+          // Provider call failed — background is retrying on its own with
+          // backoff; just reflect that in the loading line and keep waiting.
+          if (loadingEl && shouldRender(myGen, requestSeq)) {
+            loadingEl.classList.add("zehntage-retrying");
+            loadingEl.textContent = `${msg.error} — restarting in ${msg.delaySeconds}s...`;
           }
         } else if (msg.type === "done") {
           port.disconnect();
-          resolve({ ok: true, ...msg.result });
-        } else if (msg.type === "error") {
-          port.disconnect();
-          resolve({ ok: false, error: msg.error });
+          activeTranslatePort = null;
+          resolve(msg.result);
         }
       });
       port.postMessage({
@@ -564,29 +580,25 @@ async function lookupSelection() {
     // Superseded by a newer selection or dismissed while we waited → drop it.
     if (!shouldRender(myGen, requestSeq)) return;
 
-    if (result.ok) {
-      lookupCache[cacheKey] = {
-        translation: result.translation,
-        notes: result.notes,
-        context: result.context,
-        article: result.article || "",
-        lang: result.lang || "",
-      };
-      showTranslation(
-        rect,
-        text,
-        result.translation,
-        result.notes,
-        result.context,
-        result.article || "",
-        isSingleWord,
-        context,
-        elapsedNow(),
-        result.lang || ""
-      );
-    } else {
-      showError(rect, result.error || "Translation failed");
-    }
+    lookupCache[cacheKey] = {
+      translation: result.translation,
+      notes: result.notes,
+      context: result.context,
+      article: result.article || "",
+      lang: result.lang || "",
+    };
+    showTranslation(
+      rect,
+      text,
+      result.translation,
+      result.notes,
+      result.context,
+      result.article || "",
+      isSingleWord,
+      context,
+      elapsedNow(),
+      result.lang || ""
+    );
   } catch (err) {
     if (!shouldRender(myGen, requestSeq)) return;
     showError(rect, err.message);

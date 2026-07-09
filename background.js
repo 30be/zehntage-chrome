@@ -11,6 +11,14 @@ const CLAUDE_MODEL = "claude-sonnet-5";
 const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
 const CEREBRAS_MODEL = "zai-glm-4.7";
 
+// Translate requests retry on ANY error (rate limits, timeouts, bad keys,
+// etc.) with the delay growing 1.5x each attempt, until the tab-side popup
+// is closed. Capped so a persistent failure doesn't end up waiting minutes
+// between attempts.
+const RETRY_INITIAL_DELAY_MS = 1000;
+const RETRY_BACKOFF_FACTOR = 1.5;
+const RETRY_MAX_DELAY_MS = 30000;
+
 // --- Model providers ---
 
 const WORD_SCHEMA = {
@@ -479,6 +487,14 @@ async function deleteWord(word) {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "translate") return;
 
+  // Set once the tab-side popup is dismissed (Escape, new selection, click
+  // away, etc.) — the content script disconnects the port at that point, so
+  // this is our signal to give up on the retry loop below.
+  let cancelled = false;
+  port.onDisconnect.addListener(() => {
+    cancelled = true;
+  });
+
   port.onMessage.addListener((msg) => {
     if (msg.action !== "translate") return;
 
@@ -495,21 +511,33 @@ chrome.runtime.onConnect.addListener((port) => {
       schema = REF_SCHEMA;
     }
 
-    callModel(prompt, schema, (partial) => {
-      try {
-        port.postMessage({ type: "chunk", text: partial });
-      } catch {}
-    })
-      .then((result) => {
+    (async () => {
+      let delay = RETRY_INITIAL_DELAY_MS;
+      while (!cancelled) {
         try {
-          port.postMessage({ type: "done", result });
-        } catch {}
-      })
-      .catch((err) => {
-        try {
-          port.postMessage({ type: "error", error: err.message });
-        } catch {}
-      });
+          const result = await callModel(prompt, schema, (partial) => {
+            try {
+              port.postMessage({ type: "chunk", text: partial });
+            } catch {}
+          });
+          try {
+            port.postMessage({ type: "done", result });
+          } catch {}
+          return;
+        } catch (err) {
+          if (cancelled) return;
+          try {
+            port.postMessage({
+              type: "retry",
+              error: err.message,
+              delaySeconds: Math.round((delay / 1000) * 10) / 10,
+            });
+          } catch {}
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          delay = Math.min(delay * RETRY_BACKOFF_FACTOR, RETRY_MAX_DELAY_MS);
+        }
+      }
+    })();
   });
 });
 

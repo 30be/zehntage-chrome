@@ -133,6 +133,10 @@
   color: #a6adc8;
 }
 
+.zehntage-popup .zehntage-loading.zehntage-retrying {
+  color: #f38ba8;
+}
+
 mark.zehntage-word {
   background: none;
   color: inherit;
