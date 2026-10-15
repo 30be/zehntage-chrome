@@ -5,7 +5,8 @@
   "description": "Translate selected text, learn vocabulary, export to Anki",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://*/*"

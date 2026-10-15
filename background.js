@@ -1,5 +1,5 @@
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = "openai/gpt-oss-120b";
@@ -18,6 +18,11 @@ const CEREBRAS_MODEL = "zai-glm-4.7";
 const RETRY_INITIAL_DELAY_MS = 1000;
 const RETRY_BACKOFF_FACTOR = 1.5;
 const RETRY_MAX_DELAY_MS = 30000;
+
+// "Ask Opus" goes through the local Claude Code CLI via a native messaging
+// host (native/opus-host.mjs, registered by native/install.sh), so it runs on
+// the Claude subscription instead of the API key.
+const OPUS_HOST = "de.zehntage.opus";
 
 // --- Model providers ---
 
@@ -90,13 +95,17 @@ async function readSSE(resp, onEvent) {
   }
 }
 
+function jsonSystemPrompt(jsonSchema) {
+  return `Respond with only a JSON object matching this schema, no other text: ${JSON.stringify(jsonSchema)}`;
+}
+
 function parseModelJson(full, label) {
   if (!full) throw new Error(`Unexpected ${label} response`);
-  const cleaned = full
-    .replace(/^```json\s*/, "")
-    .replace(/```\s*$/, "")
-    .trim();
-  return JSON.parse(cleaned);
+  // Keep only the outermost {...}, dropping code fences or chatter around it.
+  const start = full.indexOf("{");
+  const end = full.lastIndexOf("}");
+  if (start === -1 || end < start) throw new Error(`Unexpected ${label} response`);
+  return JSON.parse(full.slice(start, end + 1));
 }
 
 async function callGemini(prompt, schema, onChunk) {
@@ -194,9 +203,29 @@ async function callGroq(prompt, schema, onChunk) {
   return parseModelJson(full, "Groq");
 }
 
+// Claude thinks adaptively unless told otherwise, and thinking tokens count
+// toward max_tokens. Haiku 5.5 is the fast option, so turn its thinking off at
+// low effort — same idea as Flash-Lite / gpt-oss-20b / Qwen. Sonnet 5 keeps its
+// default thinking pass (like gpt-oss-120b's "high") and gets max_tokens
+// headroom so thinking can't cut the JSON off. Exact IDs only: Sonnet 5.5 and
+// Opus 5.5 reject thinking "disabled" with a 400 — Opus 5.5 can only be turned
+// down to low effort, where it thinks briefly (TTFT ~1.5-2s in testing).
+function claudeReasoningParams(model) {
+  if (model === "claude-haiku-5-5") {
+    return { max_tokens: 1024, thinking: { type: "disabled" }, output_config: { effort: "low" } };
+  }
+  if (model === "claude-opus-5-5") {
+    return { max_tokens: 4096, output_config: { effort: "low" } };
+  }
+  return { max_tokens: 4096 };
+}
+
 async function callClaude(prompt, schema, onChunk) {
-  const { claudeApiKey } = await chrome.storage.local.get("claudeApiKey");
+  const { claudeApiKey, claudeModel } = await chrome.storage.local.get(["claudeApiKey", "claudeModel"]);
   if (!claudeApiKey) throw new Error("Anthropic API key not set");
+  const model = claudeModel || CLAUDE_MODEL;
+  const params = claudeReasoningParams(model);
+  const jsonSchema = toJsonSchema(schema);
 
   const resp = await fetch(CLAUDE_URL, {
     method: "POST",
@@ -207,10 +236,13 @@ async function callClaude(prompt, schema, onChunk) {
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 1024,
+      model,
+      ...params,
+      // No output_config.format: constrained decoding added ~600ms to time to
+      // first token on every model. The system prompt alone gave valid JSON in
+      // 28/28 Haiku 5.5 runs, and parseModelJson trims any stray preamble.
       stream: true,
-      system: `Respond with only a JSON object matching this schema, no other text: ${JSON.stringify(toJsonSchema(schema))}`,
+      system: jsonSystemPrompt(jsonSchema),
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -224,14 +256,26 @@ async function callClaude(prompt, schema, onChunk) {
     throw new Error(`Claude API error ${resp.status}: ${message}`);
   }
 
+  // Thinking blocks and pings are ignored; only text deltas build the answer.
+  // readSSE swallows anything thrown from this callback, so stream errors and
+  // the stop reason are recorded here and raised after the stream ends.
   let full = "";
+  let stopReason = null;
+  let streamError = null;
   await readSSE(resp, (evt) => {
     if (evt.type === "content_block_delta" && evt.delta && evt.delta.type === "text_delta") {
       full += evt.delta.text;
       if (onChunk) onChunk(full);
+    } else if (evt.type === "message_delta" && evt.delta && evt.delta.stop_reason) {
+      stopReason = evt.delta.stop_reason;
+    } else if (evt.type === "error") {
+      streamError = (evt.error && evt.error.message) || "stream error";
     }
   });
 
+  if (streamError) throw new Error(`Claude API error: ${streamError}`);
+  if (stopReason === "refusal") throw new Error("Claude declined to answer this text");
+  if (stopReason === "max_tokens") throw new Error("Claude response was cut off (max_tokens)");
   return parseModelJson(full, "Claude");
 }
 
@@ -274,6 +318,35 @@ async function callCerebras(prompt, schema, onChunk) {
   });
 
   return parseModelJson(full, "Cerebras");
+}
+
+// One-shot: the host runs `claude -p` with Opus at high effort and replies
+// with the final text. No streaming — the answer replaces the shown one only
+// once it is complete anyway.
+async function callOpusCli(prompt, schema) {
+  const reply = await chrome.runtime.sendNativeMessage(OPUS_HOST, {
+    prompt,
+    system: jsonSystemPrompt(toJsonSchema(schema)),
+  });
+  if (!reply) throw new Error("Opus host gave no reply");
+  if (reply.error) throw new Error(reply.error);
+  return parseModelJson(reply.text, "Opus");
+}
+
+// Short name of the model that answers lookups, shown next to the timing.
+async function modelLabel() {
+  const { provider, groqModel, claudeModel } = await chrome.storage.local.get(["provider", "groqModel", "claudeModel"]);
+  if (provider === "claude") {
+    const m = claudeModel || CLAUDE_MODEL;
+    // "Opus" also hides the "Ask Opus" button and skips the CLI card (content.js).
+    return m.includes("haiku") ? "Haiku" : m.includes("opus") ? "Opus" : "Sonnet";
+  }
+  if (provider === "groq") {
+    const m = groqModel || GROQ_MODEL;
+    return m.includes("qwen") ? "Qwen" : m.includes("20b") ? "GPT-OSS 20B" : "GPT-OSS 120B";
+  }
+  if (provider === "cerebras") return "GLM";
+  return "Gemini";
 }
 
 // Route to the provider chosen in settings (defaults to Gemini). onChunk, if
@@ -511,7 +584,27 @@ chrome.runtime.onConnect.addListener((port) => {
       schema = REF_SCHEMA;
     }
 
+    // Opus runs on demand for a lookup already answered once, so a failure
+    // (host not installed, CLI logged out) is reported instead of retried.
+    if (msg.opus) {
+      callOpusCli(prompt, schema).then(
+        (result) => {
+          try {
+            port.postMessage({ type: "done", result, model: "Opus" });
+          } catch {}
+        },
+        (err) => {
+          try {
+            port.postMessage({ type: "error", error: err.message });
+          } catch {}
+        }
+      );
+      return;
+    }
+
     (async () => {
+      // Read before the call, so a settings change mid-request can't mislabel it.
+      const model = await modelLabel();
       let delay = RETRY_INITIAL_DELAY_MS;
       while (!cancelled) {
         try {
@@ -521,7 +614,7 @@ chrome.runtime.onConnect.addListener((port) => {
             } catch {}
           });
           try {
-            port.postMessage({ type: "done", result });
+            port.postMessage({ type: "done", result, model });
           } catch {}
           return;
         } catch (err) {

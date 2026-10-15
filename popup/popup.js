@@ -12,8 +12,8 @@ const wordCountEl = document.getElementById("word-count");
 
 // Load existing settings
 chrome.storage.local.get(
-  ["apiKey", "groqApiKey", "claudeApiKey", "cerebrasApiKey", "groqModel", "provider", "ankiUrl", "ankiKey", "sitePatterns", "words"],
-  ({ apiKey, groqApiKey, claudeApiKey, cerebrasApiKey, groqModel, provider, ankiUrl, ankiKey, sitePatterns, words }) => {
+  ["apiKey", "groqApiKey", "claudeApiKey", "cerebrasApiKey", "groqModel", "claudeModel", "provider", "ankiUrl", "ankiKey", "sitePatterns", "words"],
+  ({ apiKey, groqApiKey, claudeApiKey, cerebrasApiKey, groqModel, claudeModel, provider, ankiUrl, ankiKey, sitePatterns, words }) => {
     if (apiKey) {
       keyInput.value = apiKey;
       statusEl.textContent = "Key saved.";
@@ -35,7 +35,11 @@ chrome.storage.local.get(
             ? "groq-20b"
             : "groq-120b"
         : provider === "claude"
-          ? "claude"
+          ? claudeModel === "claude-haiku-5-5"
+            ? "claude-haiku"
+            : claudeModel === "claude-opus-5-5"
+              ? "claude-opus"
+              : "claude"
           : provider === "cerebras"
             ? "cerebras"
             : "gemini";
@@ -57,9 +61,13 @@ saveBtn.addEventListener("click", () => {
   const choice = providerInput.value;
   const provider = choice.startsWith("groq")
     ? "groq"
-    : choice === "claude" || choice === "cerebras"
-      ? choice
-      : "gemini";
+    : choice.startsWith("claude")
+      ? "claude"
+      : choice === "cerebras"
+        ? "cerebras"
+        : "gemini";
+  const claudeModel =
+    choice === "claude-haiku" ? "claude-haiku-5-5" : choice === "claude-opus" ? "claude-opus-5-5" : "claude-sonnet-5";
   const groqModel =
     choice === "groq-20b"
       ? "openai/gpt-oss-20b"
@@ -101,7 +109,7 @@ saveBtn.addEventListener("click", () => {
     .filter((l) => l.length > 0);
 
   chrome.storage.local.set(
-    { apiKey: key, groqApiKey: groqKey, claudeApiKey: claudeKey, cerebrasApiKey: cerebrasKey, provider, groqModel, ankiUrl, ankiKey, sitePatterns },
+    { apiKey: key, groqApiKey: groqKey, claudeApiKey: claudeKey, cerebrasApiKey: cerebrasKey, provider, groqModel, claudeModel, ankiUrl, ankiKey, sitePatterns },
     () => {
       ankiUrlInput.value = ankiUrl;
       statusEl.textContent = "Saved!";

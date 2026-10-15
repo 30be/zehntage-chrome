@@ -54,6 +54,17 @@ function parseGeminiResponse(responseText) {
   return JSON.parse(cleaned);
 }
 
+// Per-model Claude request knobs (see background.js).
+function claudeReasoningParams(model) {
+  if (model === "claude-haiku-5-5") {
+    return { max_tokens: 1024, thinking: { type: "disabled" }, output_config: { effort: "low" } };
+  }
+  if (model === "claude-opus-5-5") {
+    return { max_tokens: 4096, output_config: { effort: "low" } };
+  }
+  return { max_tokens: 4096 };
+}
+
 function buildContextWithBold(context, word) {
   const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return context.replace(new RegExp(`(${escapedWord})`, "gi"), "<b>$1</b>");
@@ -204,6 +215,32 @@ test("buildTranslatePrompt translates only the marked text", () => {
     prompt.includes("Translate only that text, nothing else."),
     "should instruct to translate only the marked text"
   );
+});
+
+// --- Claude request params ---
+
+test("claudeReasoningParams turns thinking off for Haiku 5.5", () => {
+  const p = claudeReasoningParams("claude-haiku-5-5");
+  assertEqual(p.thinking && p.thinking.type, "disabled", "thinking disabled");
+  assertEqual(p.output_config && p.output_config.effort, "low", "low effort");
+  assertEqual(p.max_tokens, 1024, "max_tokens");
+});
+
+test("claudeReasoningParams leaves other models' thinking alone, with headroom", () => {
+  // Sonnet 5.5 / Opus 5.5 400 on thinking "disabled" — never send it to them.
+  for (const m of ["claude-sonnet-5", "claude-sonnet-5-5", undefined]) {
+    const p = claudeReasoningParams(m);
+    assert(!("thinking" in p), `${m}: no thinking field`);
+    assert(!("output_config" in p), `${m}: no output_config`);
+    assert(p.max_tokens >= 2048, `${m}: max_tokens leaves room for thinking`);
+  }
+});
+
+test("claudeReasoningParams runs Opus 5.5 at low effort, never thinking disabled", () => {
+  const p = claudeReasoningParams("claude-opus-5-5");
+  assert(!("thinking" in p), "no thinking field (disabled is a 400 on Opus 5.5)");
+  assertEqual(p.output_config && p.output_config.effort, "low", "low effort");
+  assert(p.max_tokens >= 2048, "max_tokens leaves room for thinking");
 });
 
 // --- Summary ---

@@ -3,8 +3,20 @@ let popup = null;
 // popup can tell the background script to stop retrying.
 let activeTranslatePort = null;
 
-// In-memory caches, keyed by selected text. Per page — cleared on reload.
-const lookupCache = {};
+// In-memory caches, keyed by selected text. Per page — cleared on reload, and
+// lookupCache (except Opus answers) whenever the model changes (see
+// storage.onChanged below).
+let lookupCache = {};
+// Opus answers, prefetched on every desktop lookup so "Ask Opus" is instant —
+// or at least already underway. Key → Promise<{ result, model }>. Kept across
+// model changes: the Opus answer doesn't depend on that setting.
+let opusCache = {};
+// The answer model itself is Opus (over the API) — then the CLI Opus prefetch
+// would only duplicate it. Kept in sync from storage (init + onChanged).
+let answerModelIsOpus = false;
+function updateAnswerModel({ provider, claudeModel }) {
+  answerModelIsOpus = provider === "claude" && claudeModel === "claude-opus-5-5";
+}
 let knownWords = {};
 let enabled = false;
 // True once a Gemini API key is stored — gates lookups and offers settings.
@@ -130,7 +142,7 @@ function showLoading(rect) {
   createPopup(rect, '<span class="zehntage-loading">Translating...</span>');
 }
 
-function showTranslation(rect, word, translation, notes, context, article, isSingleWord, pageContext, elapsed, lang) {
+function showTranslation(rect, word, translation, notes, context, article, isSingleWord, pageContext, elapsed, lang, model) {
   const wordLower = word.toLowerCase();
   const alreadySaved = knownWords.hasOwnProperty(wordLower);
   const display = article ? `${article} ${word}` : word;
@@ -149,7 +161,8 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
     html += `<div class="notes">${escapeHtml(notes)}</div>`;
   }
   if (elapsed) {
-    html += `<div class="zehntage-elapsed">${escapeHtml(elapsed)}</div>`;
+    const label = model ? `${elapsed} · ${model}` : elapsed;
+    html += `<div class="zehntage-elapsed">${escapeHtml(label)}</div>`;
   }
 
   let actions = "";
@@ -158,12 +171,17 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
       html += `<div class="saved-label">Already saved</div>`;
       actions += `<button class="btn-delete" data-word="${escapeAttr(word)}">Delete</button>`;
     } else {
-      actions += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}" data-context="${escapeAttr(context || "")}" data-article="${escapeAttr(article || "")}">Add to Anki</button>`;
+      actions += `<button class="btn-anki" data-word="${escapeAttr(word)}" data-translation="${escapeAttr(translation)}" data-notes="${escapeAttr(notes || "")}" data-context="${escapeAttr(context || "")}" data-article="${escapeAttr(article || "")}" data-page-context="${escapeAttr(pageContext || "")}" data-model="${escapeAttr(model || "")}">Add to Anki</button>`;
     }
   }
 
   const refContext = pageContext || context || "";
   actions += `<button class="btn-discuss" data-text="${escapeAttr(word)}" data-context="${escapeAttr(refContext)}">Discuss</button>`;
+  // Native messaging (the local Claude CLI) only exists on desktop, and an
+  // answer that already came from Opus has nothing to upgrade to.
+  if (!isMobile() && model !== "Opus") {
+    actions += `<button class="btn-discuss btn-opus" title="Shortcut: o">Ask Opus</button>`;
+  }
   html += `<div class="actions">${actions}</div>`;
 
   const el = createPopup(rect, html);
@@ -192,7 +210,15 @@ function showTranslation(rect, word, translation, notes, context, article, isSin
     });
   }
 
-  const discussBtn = el.querySelector(".btn-discuss");
+  const opusBtn = el.querySelector(".btn-opus");
+  if (opusBtn) {
+    opusBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      askOpus(opusBtn, rect, word, pageContext || "", isSingleWord);
+    });
+  }
+
+  const discussBtn = el.querySelector(".btn-discuss:not(.btn-opus)");
   if (discussBtn) {
     discussBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -236,6 +262,7 @@ async function showSettings(rect, message) {
     cerebrasApiKey = "",
     provider = "gemini",
     groqModel = "",
+    claudeModel = "",
     ankiUrl = "",
     ankiKey = "",
     sitePatterns = [],
@@ -246,13 +273,14 @@ async function showSettings(rect, message) {
     "cerebrasApiKey",
     "provider",
     "groqModel",
+    "claudeModel",
     "ankiUrl",
     "ankiKey",
     "sitePatterns",
   ]);
 
   const selected = (v) =>
-    (provider === "groq" ? (groqModel === "qwen/qwen3.6-27b" ? "groq-qwen" : groqModel === "openai/gpt-oss-20b" ? "groq-20b" : "groq-120b") : provider) === v
+    (provider === "groq" ? (groqModel === "qwen/qwen3.6-27b" ? "groq-qwen" : groqModel === "openai/gpt-oss-20b" ? "groq-20b" : "groq-120b") : provider === "claude" && claudeModel === "claude-haiku-5-5" ? "claude-haiku" : provider === "claude" && claudeModel === "claude-opus-5-5" ? "claude-opus" : provider) === v
       ? " selected"
       : "";
 
@@ -262,11 +290,13 @@ async function showSettings(rect, message) {
       : "") +
     `<label class="zehntage-field">Model
       <select class="zehntage-input" data-k="provider">
-        <option value="gemini"${selected("gemini")}>Gemini 3.1 Flash Lite</option>
+        <option value="gemini"${selected("gemini")}>Gemini 3.5 Flash Lite</option>
         <option value="groq-120b"${selected("groq-120b")}>GPT OSS 120B (Groq)</option>
         <option value="groq-20b"${selected("groq-20b")}>GPT OSS 20B (Groq)</option>
         <option value="groq-qwen"${selected("groq-qwen")}>Qwen3.6 27B (Groq)</option>
         <option value="claude"${selected("claude")}>Claude Sonnet 5</option>
+        <option value="claude-haiku"${selected("claude-haiku")}>Claude Haiku 5.5</option>
+        <option value="claude-opus"${selected("claude-opus")}>Claude Opus 5.5</option>
         <option value="cerebras"${selected("cerebras")}>GLM 4.7 (Cerebras)</option>
       </select></label>
     <label class="zehntage-field">Gemini API Key
@@ -299,7 +329,9 @@ async function showSettings(rect, message) {
   el.querySelector(".zehntage-save").addEventListener("click", async (e) => {
     e.stopPropagation();
     const choiceV = val("provider") || "gemini";
-    const providerV = choiceV.startsWith("groq") ? "groq" : choiceV;
+    const providerV = choiceV.startsWith("groq") ? "groq" : choiceV.startsWith("claude") ? "claude" : choiceV;
+    const claudeModelV =
+      choiceV === "claude-haiku" ? "claude-haiku-5-5" : choiceV === "claude-opus" ? "claude-opus-5-5" : "claude-sonnet-5";
     const groqModelV =
       choiceV === "groq-20b"
         ? "openai/gpt-oss-20b"
@@ -334,6 +366,7 @@ async function showSettings(rect, message) {
       ...keys,
       provider: providerV,
       groqModel: groqModelV,
+      claudeModel: claudeModelV,
       ankiUrl: ankiUrlV,
       ankiKey: val("ankiKey").trim(),
       sitePatterns: patterns,
@@ -359,12 +392,23 @@ async function showSettings(rect, message) {
 
 async function handleAddWord(btn) {
   const word = btn.dataset.word;
-  const translation = btn.dataset.translation;
-  const notes = btn.dataset.notes;
-  const context = btn.dataset.context;
-  const article = btn.dataset.article || "";
+  // The card comes from Opus when it can (desktop): the shown answer is
+  // usually the fast model's, but the card is what gets studied for weeks.
+  // Opus was prefetched on lookup, so this mostly resolves at once. If it
+  // fails, the shown answer is saved instead.
+  let { translation, notes, context, article = "" } = btn.dataset;
 
   btn.disabled = true;
+  if (!isMobile() && btn.dataset.model !== "Opus") {
+    btn.textContent = "Opus…";
+    try {
+      const { result: r } = await opusAnswer(word, btn.dataset.pageContext || "", true);
+      ({ translation, notes, context } = r);
+      article = r.article || "";
+    } catch (err) {
+      console.warn("[ZehnTage] Opus card failed, saving the shown answer:", err.message);
+    }
+  }
   btn.textContent = "Saving...";
 
   try {
@@ -435,6 +479,71 @@ The part I selected: «${text}».
 
   const url = "https://claude.ai/new?incognito&q=" + encodeURIComponent(prompt);
   window.open(url, "_blank");
+}
+
+// The Opus answer for a lookup, from opusCache or started now. Uses its own
+// port (not activeTranslatePort), so closing the popup doesn't cancel it.
+function opusAnswer(text, context, isSingleWord) {
+  const key = (isSingleWord ? "w:" : "p:") + text;
+  if (!opusCache[key]) {
+    const p = new Promise((resolve, reject) => {
+      const port = chrome.runtime.connect({ name: "translate" });
+      port.onMessage.addListener((msg) => {
+        if (msg.type === "done") resolve(msg);
+        else if (msg.type === "error") reject(new Error(msg.error));
+        else return;
+        port.disconnect();
+      });
+      port.onDisconnect.addListener(() => reject(new Error("Opus request was dropped")));
+      port.postMessage({
+        action: "translate",
+        text,
+        context,
+        url: location.href.substring(0, 200),
+        isSingleWord,
+        opus: true,
+      });
+    });
+    // A failure shouldn't stick — the next click starts a fresh run.
+    p.catch(() => {
+      if (opusCache[key] === p) delete opusCache[key];
+    });
+    opusCache[key] = p;
+  }
+  return opusCache[key];
+}
+
+// Swap the Opus answer in for the fast model's — in the popup and in
+// lookupCache, so selecting the same text again shows it straight away.
+function askOpus(btn, rect, text, context, isSingleWord) {
+  const myGen = requestSeq;
+  const startTime = performance.now();
+  btn.disabled = true;
+  btn.textContent = "Opus…";
+
+  opusAnswer(text, context, isSingleWord).then(
+    ({ result: r, model }) => {
+      lookupCache[(isSingleWord ? "w:" : "p:") + text] = {
+        translation: r.translation,
+        notes: r.notes,
+        context: r.context,
+        article: r.article || "",
+        lang: r.lang || "",
+        model,
+      };
+      // A new selection or dismissal since the click → nothing to override.
+      if (!shouldRender(myGen, requestSeq)) return;
+      const elapsed = ((performance.now() - startTime) / 1000).toFixed(1) + "s";
+      showTranslation(rect, text, r.translation, r.notes, r.context, r.article || "", isSingleWord, context, elapsed, r.lang || "", model);
+    },
+    (err) => {
+      if (!shouldRender(myGen, requestSeq)) return;
+      btn.disabled = false;
+      btn.textContent = "Opus failed";
+      btn.title = err.message;
+      console.warn("[ZehnTage] Ask Opus failed:", err.message);
+    }
+  );
 }
 
 // --- Selection handling ---
@@ -522,6 +631,10 @@ async function lookupSelection() {
     }
   }
 
+  // Start Opus in the background right away (desktop only — native messaging),
+  // so the "Ask Opus" button usually has its answer ready.
+  if (!isMobile() && !answerModelIsOpus) opusAnswer(text, context, isSingleWord).catch(() => {});
+
   const cacheKey = (isSingleWord ? "w:" : "p:") + text;
   if (lookupCache[cacheKey]) {
     const c = lookupCache[cacheKey];
@@ -535,7 +648,8 @@ async function lookupSelection() {
       isSingleWord,
       context,
       elapsedNow(),
-      c.lang || ""
+      c.lang || "",
+      c.model
     );
     return;
   }
@@ -544,9 +658,12 @@ async function lookupSelection() {
   // Grab the loading span so streamed chunks can update it in place, without
   // tearing down and rebuilding the whole popup on every delta.
   const loadingEl = popup ? popup.querySelector(".zehntage-loading") : null;
+  // Store the result in the cache that was current when we asked, so a model
+  // switch mid-request can't slip the old model's answer into the fresh cache.
+  const cache = lookupCache;
 
   try {
-    const result = await new Promise((resolve) => {
+    const { result, model } = await new Promise((resolve) => {
       const port = chrome.runtime.connect({ name: "translate" });
       activeTranslatePort = port;
       port.onMessage.addListener((msg) => {
@@ -565,7 +682,7 @@ async function lookupSelection() {
         } else if (msg.type === "done") {
           port.disconnect();
           activeTranslatePort = null;
-          resolve(msg.result);
+          resolve(msg);
         }
       });
       port.postMessage({
@@ -580,12 +697,13 @@ async function lookupSelection() {
     // Superseded by a newer selection or dismissed while we waited → drop it.
     if (!shouldRender(myGen, requestSeq)) return;
 
-    lookupCache[cacheKey] = {
+    cache[cacheKey] = {
       translation: result.translation,
       notes: result.notes,
       context: result.context,
       article: result.article || "",
       lang: result.lang || "",
+      model,
     };
     showTranslation(
       rect,
@@ -597,7 +715,8 @@ async function lookupSelection() {
       isSingleWord,
       context,
       elapsedNow(),
-      result.lang || ""
+      result.lang || "",
+      model
     );
   } catch (err) {
     if (!shouldRender(myGen, requestSeq)) return;
@@ -630,6 +749,24 @@ document.addEventListener("keydown", (e) => {
     removePopup();
   }
 });
+
+// "o" while a popup is open = "Ask Opus". Capture phase so a site's own
+// single-key shortcuts (YouTube, Gmail, …) don't also fire; only when not
+// typing into a field, and only when the popup actually offers Opus.
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key !== "o" || e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    const btn = popup && popup.querySelector(".btn-opus:not(:disabled)");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    btn.click();
+  },
+  true
+);
 
 document.addEventListener("mousedown", (e) => {
   if (isMobile()) return;
@@ -765,7 +902,9 @@ async function init() {
     "claudeApiKey",
     "cerebrasApiKey",
     "provider",
+    "claudeModel",
   ]);
+  updateAnswerModel(keys);
   apiKeyPresent = hasKeyForProvider(keys.provider || "gemini", keys);
 
   try {
@@ -787,6 +926,16 @@ if (document.readyState === "loading") {
 // page, or another tab): refresh the key gate and re-highlight on word changes.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
+  // Cached lookups came from the previous model — drop them so re-selecting the
+  // same text asks the new one. Firefox reports unchanged keys too, hence the
+  // value check (saving other settings shouldn't wipe the cache). Opus answers
+  // don't depend on that setting, so they stay.
+  if (changes.provider || changes.claudeModel) {
+    chrome.storage.local.get(["provider", "claudeModel"]).then(updateAnswerModel);
+  }
+  if (["provider", "groqModel", "claudeModel"].some((k) => changes[k] && changes[k].oldValue !== changes[k].newValue)) {
+    lookupCache = Object.fromEntries(Object.entries(lookupCache).filter(([, v]) => v.model === "Opus"));
+  }
   if (
     changes.apiKey ||
     changes.groqApiKey ||
