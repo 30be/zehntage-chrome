@@ -546,6 +546,100 @@ function askOpus(btn, rect, text, context, isSingleWord) {
   );
 }
 
+// --- Streaming preview ---
+
+const JSON_ESCAPES = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+
+// Reads the JSON string whose opening quote is at text[i]. Stops early at the
+// end of the input — including inside an escape sequence, which is held back
+// until it is complete rather than shown half-way ("\" or "\u04").
+// Returns { value, end (index after the closing quote), closed }.
+function readJsonString(text, i) {
+  let value = "";
+  let j = i + 1;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === '"') return { value, end: j + 1, closed: true };
+    if (c !== "\\") {
+      value += c;
+      j++;
+      continue;
+    }
+    const e = text[j + 1];
+    if (e === undefined) break;
+    if (e === "u") {
+      const hex = text.slice(j + 2, j + 6);
+      if (!/^[0-9a-fA-F]{4}$/.test(hex)) break; // incomplete (or broken) — wait
+      value += String.fromCharCode(parseInt(hex, 16));
+      j += 6;
+    } else {
+      value += JSON_ESCAPES[e] ?? e;
+      j += 2;
+    }
+  }
+  // A high surrogate whose low half hasn't arrived would render as "�".
+  if (/[\uD800-\uDBFF]$/.test(value)) value = value.slice(0, -1);
+  return { value, end: text.length, closed: false };
+}
+
+// Tolerant parse of a flat JSON object that is still being streamed:
+// '{"article":"","translation":"важный","notes":"From Lat' →
+// { fields: { article: "", translation: "важный", notes: "From Lat" }, open: "notes" }.
+// Anything before the first "{" (a ```json fence, chatter) is skipped; a key
+// is only reported once its name is complete; `open` names the field whose
+// value is still being written (null when none is). Nested values end the
+// scan — the schemas here are flat strings.
+function parsePartialJson(text) {
+  const fields = {};
+  let i = text.indexOf("{");
+  if (i === -1) return { fields, open: null };
+  i++;
+  const skipWs = () => {
+    while (i < text.length && /[\s,]/.test(text[i])) i++;
+  };
+  while (true) {
+    skipWs();
+    if (i >= text.length || text[i] !== '"') break; // end, "}", or not JSON
+    const key = readJsonString(text, i);
+    if (!key.closed) break;
+    i = key.end;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] !== ":") break;
+    i++;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (i >= text.length) return { fields, open: key.value };
+    if (text[i] === '"') {
+      const val = readJsonString(text, i);
+      fields[key.value] = val.value;
+      if (!val.closed) return { fields, open: key.value };
+      i = val.end;
+    } else {
+      // number / true / false / null — only once something follows it, so a
+      // half-streamed "tru" or "12" (of 123) is never reported.
+      const m = /^(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(?=[\s,}])/.exec(text.slice(i));
+      if (!m) break;
+      fields[key.value] = JSON.parse(m[1]);
+      i += m[1].length;
+    }
+  }
+  return { fields, open: null };
+}
+
+// The popup body for a half-streamed answer, laid out like showTranslation's,
+// or null while there is nothing worth showing yet (no translation started).
+function previewHtml(text, word, isSingleWord) {
+  const { fields, open } = parsePartialJson(text);
+  if (typeof fields.translation !== "string") return null;
+  const caret = (k) => (open === k ? '<span class="zehntage-caret"></span>' : "");
+  const fmt = (k) => escapeHtml(String(fields[k])).replace(/\n/g, "<br>") + caret(k);
+  // A half-written article ("di") would flash the wrong one — only a whole one.
+  const article = ["der", "die", "das"].includes(fields.article) && open !== "article" ? fields.article : "";
+  const display = elideMiddle(article ? `${article} ${word}` : word);
+  let html = `<span class="word">${escapeHtml(display).replace(/\n/g, "<br>")}</span> → ${fmt("translation")}`;
+  if (typeof fields.notes === "string" && fields.notes) html += `<div class="notes">${fmt("notes")}</div>`;
+  return `<div class="zehntage-preview">${html}</div>`;
+}
+
 // --- Selection handling ---
 
 // Set when a mousedown dismissed an open popup during the current gesture.
@@ -670,7 +764,9 @@ async function lookupSelection() {
         if (msg.type === "chunk") {
           if (loadingEl && shouldRender(myGen, requestSeq)) {
             loadingEl.classList.remove("zehntage-retrying");
-            loadingEl.textContent = msg.text;
+            const html = previewHtml(msg.text, text, isSingleWord);
+            if (html) loadingEl.innerHTML = html;
+            else loadingEl.textContent = "Translating...";
           }
         } else if (msg.type === "retry") {
           // Provider call failed — background is retrying on its own with

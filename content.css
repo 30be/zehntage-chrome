@@ -137,6 +137,24 @@
   color: #f38ba8;
 }
 
+/* Half-streamed answer: same look as the final card, plus a caret on the
+   field still being written. */
+.zehntage-popup .zehntage-preview {
+  color: #cdd6f4;
+}
+
+.zehntage-popup .zehntage-caret::after {
+  content: "▍";
+  color: #a6adc8;
+  animation: zehntage-blink 1s steps(1) infinite;
+}
+
+@keyframes zehntage-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 mark.zehntage-word {
   background: none;
   color: inherit;
